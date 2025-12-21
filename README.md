@@ -23,8 +23,7 @@ taw/                           # 이 레포
 └── _taw/                      # 전역 설정
     ├── PROMPT.md              # 전역 에이전트 프롬프트
     ├── bin/                   # 실행 파일
-    │   ├── taw                # 메인 명령어
-    │   ├── start              # 세션 시작
+    │   ├── taw                # 메인 명령어 (세션 시작)
     │   └── new-task           # 태스크 생성
     └── claude/commands/       # slash commands
         ├── pr.md              # /pr - PR 생성
@@ -36,8 +35,11 @@ taw/                           # 이 레포
     ├── .claude                # -> _taw/claude (symlink)
     ├── .metadata/             # 로그 및 상태
     └── agents/{task-name}/    # 태스크별 작업 공간
-        ├── .task              # 태스크 내용
-        ├── .log               # 진행 로그
+        ├── task               # 태스크 내용
+        ├── log                # 진행 로그
+        ├── attach             # 태스크 재연결 스크립트
+        ├── origin             # -> 프로젝트 루트 (symlink)
+        ├── worktree/          # git worktree (자동 생성)
         ├── .tab-created       # 탭 생성 마커
         └── .pr                # PR 번호 (생성 시)
 ```
@@ -48,15 +50,19 @@ taw/                           # 이 레포
 
 ```bash
 cd /path/to/your/git/project
-taw  # .taw 디렉토리 생성 및 tmux 세션 시작
+taw  # .taw 디렉토리 생성 및 tmux 세션 시작 → 자동으로 new-task 실행
 ```
+
+첫 시작 시 자동으로 태스크 작성 에디터가 열립니다.
 
 ### 태스크 생성
 
-tmux 세션 내에서:
+추가 태스크 생성이 필요하면 tmux 세션 내에서:
 ```bash
 .taw/new-task  # $EDITOR에서 태스크 작성 → 자동으로 agent 시작
 ```
+
+vi/vim/nvim 사용 시 자동으로 insert 모드로 시작합니다.
 
 ### Slash Commands
 
@@ -65,6 +71,7 @@ Agent가 사용할 수 있는 slash commands:
 | Command | 설명 |
 |---------|------|
 | `/pr` | PR 자동 생성 및 브라우저 열기 |
+| `/merge` | worktree 브랜치를 프로젝트의 현재 브랜치에 머지 |
 | `/done` | 태스크 정리 (worktree, branch, 디렉토리, window) |
 
 ### Window 상태
@@ -90,6 +97,9 @@ brew install tmux fswatch gh
 
 | 동작 | 단축키 |
 |------|--------|
+| 새 태스크 | `^n` |
+| 태스크 종료 | `^e` (agent에 /done 전송) |
 | Pane 이동 | `⌥ + ←/→` |
+| Pane 분할 | `^⌥ + h/j/k/l` (좌/하/상/우) |
 | Window 이동 | `^⌥ + ←/→` |
 | Session 나가기 | `^q` (detach) |
