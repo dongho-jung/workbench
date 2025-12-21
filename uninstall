@@ -3,12 +3,12 @@
 # TAW Uninstaller
 # Removes taw command from ~/.local/bin
 
-set -e
+set -ex
 
 BIN_DIR="$HOME/.local/bin"
 TAW_SCRIPT="$BIN_DIR/taw"
 
-if [ -f "$TAW_SCRIPT" ]; then
+if [ -L "$TAW_SCRIPT" ] || [ -f "$TAW_SCRIPT" ]; then
     rm -f "$TAW_SCRIPT"
     echo "taw removed from $TAW_SCRIPT"
 else
