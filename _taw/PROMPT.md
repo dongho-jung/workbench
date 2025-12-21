@@ -5,13 +5,16 @@ You are an autonomous task processing agent.
 ## Directory Structure
 
 ```
-{project-root}/              <- The git project root (PROJECT_DIR)
-├── .taw/                    <- TAW directory (TAW_DIR)
-│   ├── PROMPT.md            # Project-specific instructions
-│   ├── .claude/             # Slash commands (symlink)
-│   └── agents/{task-name}/  <- Your isolated workspace (git worktree)
-│       ├── .task            # Task description (input)
-│       └── .log             # Progress log (you write this)
+{project-root}/                     <- PROJECT_DIR (original repo)
+├── .taw/                           <- TAW_DIR
+│   ├── PROMPT.md                   # Project-specific instructions
+│   ├── .claude/                    # Slash commands (symlink)
+│   └── agents/{task-name}/         <- Agent workspace
+│       ├── task                    # Task description (input)
+│       ├── log                     # Progress log (YOU MUST WRITE THIS)
+│       ├── attach                  # Reattach script
+│       ├── origin                  # -> PROJECT_DIR (symlink)
+│       └── worktree/               <- WORKTREE_DIR (git worktree, auto-created)
 └── ... (project files)
 ```
 
@@ -21,32 +24,45 @@ These are set when the agent starts:
 - `TASK_NAME`: The task name
 - `TAW_DIR`: The .taw directory path
 - `PROJECT_DIR`: The git project root path
+- `WORKTREE_DIR`: Your working directory (git worktree, auto-created)
+
+## Important: You are in a Worktree
+
+**Your current working directory is already the worktree.** The system automatically created it for you.
+
+- You are on branch `$TASK_NAME`
+- All your changes are isolated from the main branch
+- Commit freely - it won't affect the main branch until merged
+
+## CRITICAL: Progress Logging
+
+**YOU MUST LOG YOUR PROGRESS.** After each significant step, append to the log file:
+
+```bash
+echo "설명" >> $TAW_DIR/agents/$TASK_NAME/log
+echo "------" >> $TAW_DIR/agents/$TASK_NAME/log
+```
+
+Example log entries:
+```
+코드베이스 구조 분석 완료
+------
+인증 유효성 검사 버그 수정
+------
+테스트 추가 및 통과 확인
+------
+```
+
+**Log after every significant action - this is how the user tracks your progress.**
 
 ## Workflow
 
-1. **Create worktree** (never work directly in project root):
-   ```bash
-   # First, clean up any stale worktree references
-   git -C $PROJECT_DIR worktree prune
+1. **Start working** - You're already in the worktree, just start coding
 
-   # Then create worktree (branch name = task name)
-   git -C $PROJECT_DIR worktree add $TAW_DIR/agents/$TASK_NAME -b $TASK_NAME
-   ```
+2. **Log progress** - After each significant step (see above)
 
-2. **Work** in `$TAW_DIR/agents/$TASK_NAME/`
-
-3. **Log progress** to `$TAW_DIR/agents/$TASK_NAME/.log` after each significant step:
-   ```
-   Created worktree and switched to task branch
-   ------
-   Found the target file and analyzed the code
-   ------
-   Implemented the fix for auth validation
-   ------
-   ```
-
-4. **When done**:
-   - Commit changes in worktree
+3. **When done**:
+   - Commit your changes
    - Update window: `tmux rename-window "✅$TASK_NAME"`
 
 ## Window Status
