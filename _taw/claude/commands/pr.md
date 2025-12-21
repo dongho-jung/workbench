@@ -5,22 +5,30 @@ allowed-tools: Bash(git:*), Bash(gh:*), Bash(open:*), Bash(echo:*), Bash(tee:*)
 
 # Create Pull Request
 
-## Current State
+## Step 1: Check Current State
 
-- Task name: !`echo $TASK_NAME`
-- TAW directory: !`echo $TAW_DIR`
-- Current branch: !`git branch --show-current`
-- Remote status: !`git status -sb | head -1`
+```bash
+echo "TASK_NAME=$TASK_NAME"
+echo "WORKTREE_DIR=$WORKTREE_DIR"
+echo "TAW_DIR=$TAW_DIR"
+```
 
-## Commits on this branch
+```bash
+echo "Current branch: $(git branch --show-current)"
+git status -sb | head -1
+```
 
-!`git log --oneline main..HEAD 2>/dev/null || git log --oneline master..HEAD 2>/dev/null || git log --oneline -10`
+## Step 2: Review Changes
 
-## Changes Summary
+```bash
+git log --oneline main..HEAD 2>/dev/null || git log --oneline master..HEAD 2>/dev/null || git log --oneline -10
+```
 
-!`git diff --stat main..HEAD 2>/dev/null || git diff --stat master..HEAD 2>/dev/null || git diff --stat -10`
+```bash
+git diff --stat main..HEAD 2>/dev/null || git diff --stat master..HEAD 2>/dev/null || git diff --stat -10
+```
 
-## Instructions
+## Step 3: Create PR
 
 1. Analyze the commits and changes above to create PR title and body.
 
@@ -39,10 +47,10 @@ allowed-tools: Bash(git:*), Bash(gh:*), Bash(open:*), Bash(echo:*), Bash(tee:*)
 
 4. Push branch to remote if needed:
    ```bash
-   git push -u origin <current-branch>
+   git push -u origin $(git branch --show-current)
    ```
 
-5. Create PR and capture the URL:
+5. Create PR:
    ```bash
    gh pr create --title "title" --body "$(cat <<'EOF'
    ## Summary

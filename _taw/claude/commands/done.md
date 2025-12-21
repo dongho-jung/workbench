@@ -12,6 +12,7 @@ First, get the environment variables:
 echo "TASK_NAME=$TASK_NAME"
 echo "TAW_DIR=$TAW_DIR"
 echo "PROJECT_DIR=$PROJECT_DIR"
+echo "WORKTREE_DIR=$WORKTREE_DIR"
 ```
 
 ## Step 2: Check Merge Status
@@ -35,7 +36,7 @@ git -C $PROJECT_DIR fetch origin main
 ```
 
 ```bash
-git -C $TAW_DIR/agents/$TASK_NAME rev-parse HEAD
+git -C $WORKTREE_DIR rev-parse HEAD
 ```
 
 Then check if that commit is in main:
@@ -58,19 +59,25 @@ Execute these commands. Ignore errors - some resources may already be cleaned up
 git -C $PROJECT_DIR worktree prune
 ```
 
-### 3.2 Remove worktree ($TAW_DIR/agents/$TASK_NAME is the worktree itself)
+### 3.2 Remove worktree
 
 ```bash
-test -d $TAW_DIR/agents/$TASK_NAME && git -C $PROJECT_DIR worktree remove $TAW_DIR/agents/$TASK_NAME --force || true
+test -d $WORKTREE_DIR && git -C $PROJECT_DIR worktree remove $WORKTREE_DIR --force || true
 ```
 
-### 3.3 Delete local branch (if exists)
+### 3.3 Remove agent directory
+
+```bash
+rm -rf $TAW_DIR/agents/$TASK_NAME || true
+```
+
+### 3.4 Delete local branch (if exists)
 
 ```bash
 git -C $PROJECT_DIR branch --list $TASK_NAME | grep -q $TASK_NAME && git -C $PROJECT_DIR branch -D $TASK_NAME || true
 ```
 
-### 3.4 Close tmux window
+### 3.5 Close tmux window
 
 ```bash
 tmux kill-window
