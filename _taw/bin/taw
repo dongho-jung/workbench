@@ -132,11 +132,11 @@ check_dependencies() {
 }
 
 is_session_running() {
-    tmux has-session -t "$SESSION_NAME" 2>/dev/null
+    tmux -L "taw-$SESSION_NAME" has-session -t "$SESSION_NAME" 2>/dev/null
 }
 
 tm() {
-    tmux "$@"
+    tmux -L "taw-$SESSION_NAME" "$@"
 }
 
 cleanup() {
