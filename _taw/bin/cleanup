@@ -17,9 +17,21 @@ echo "PROJECT_DIR: $PROJECT_DIR"
 echo "WORKTREE_DIR: $WORKTREE_DIR"
 echo ""
 
+# Get project name and window_id for correct tmux targeting
+PROJECT_NAME=$(basename "$PROJECT_DIR")
+AGENT_DIR="$TAW_DIR/agents/$TASK_NAME"
+WINDOW_ID_FILE="$AGENT_DIR/.tab-lock/window_id"
+
+# Read saved window_id if exists
+WINDOW_ID=""
+if [ -f "$WINDOW_ID_FILE" ]; then
+    WINDOW_ID=$(cat "$WINDOW_ID_FILE")
+    echo "WINDOW_ID: $WINDOW_ID"
+fi
+
 # 1. Remove worktree
 echo ">>> Removing worktree..."
-if [ -d "$WORKTREE_DIR" ]; then
+if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
     git -C "$PROJECT_DIR" worktree remove "$WORKTREE_DIR" --force 2>&1 || true
 fi
 
@@ -33,11 +45,17 @@ git -C "$PROJECT_DIR" branch -D "$TASK_NAME" 2>&1 || true
 
 # 4. Remove agent directory
 echo ">>> Removing agent directory..."
-rm -rf "$TAW_DIR/agents/$TASK_NAME" 2>&1 || true
+rm -rf "$AGENT_DIR" 2>&1 || true
 
 echo ""
 echo "=== Cleanup complete ==="
 
-# 5. Close tmux window (must be last, with delay)
+# 5. Close tmux window using saved WINDOW_ID (must be last, with delay)
 echo ">>> Closing tmux window in 1 second..."
-(sleep 1 && tmux kill-window) &
+if [ -n "$WINDOW_ID" ]; then
+    # Kill specific window by ID using project-specific socket
+    (sleep 1 && tmux -L "taw-$PROJECT_NAME" kill-window -t "$WINDOW_ID") &
+else
+    # Fallback: kill current window (legacy behavior)
+    (sleep 1 && tmux kill-window) &
+fi

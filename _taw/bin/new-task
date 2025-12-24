@@ -93,18 +93,40 @@ if [[ ! "$task_name" =~ ^[a-z0-9][a-z0-9-]{6,30}[a-z0-9]$ ]]; then
     task_name="task-$timestamp"
 fi
 
-# Ensure no duplicate
-final_name="$task_name"
-counter=1
-while [ -d "$AGENTS_DIR/$final_name" ]; do
-    final_name="${task_name}-${counter}"
-    counter=$((counter + 1))
-done
+# Atomic directory creation - mkdir (without -p) fails if directory exists
+# This prevents race conditions when multiple tasks are created simultaneously
+create_task_atomically() {
+    local base_name="$1"
+    local content="$2"
+    local final_name="$base_name"
+    local counter=1
+    local max_attempts=100
 
-# Create agent directory and save task content
-agent_dir="$AGENTS_DIR/$final_name"
-mkdir -p "$agent_dir"
-echo "$task_content" > "$agent_dir/task"
+    while [ $counter -le $max_attempts ]; do
+        local agent_dir="$AGENTS_DIR/$final_name"
+        # mkdir without -p fails if directory exists (atomic check-and-create)
+        if mkdir "$agent_dir" 2>/dev/null; then
+            echo "$content" > "$agent_dir/task"
+            echo "$agent_dir"
+            return 0
+        fi
+        # Directory exists, try next name
+        final_name="${base_name}-${counter}"
+        counter=$((counter + 1))
+    done
+
+    return 1
+}
+
+agent_dir=$(create_task_atomically "$task_name" "$task_content")
+
+if [ -z "$agent_dir" ] || [ ! -d "$agent_dir" ]; then
+    echo "Failed to create task directory after multiple attempts"
+    log "Failed to create task directory for: $task_name"
+    exit 1
+fi
+
+final_name=$(basename "$agent_dir")
 
 echo "Task created: $agent_dir"
 log "Task created: $final_name"

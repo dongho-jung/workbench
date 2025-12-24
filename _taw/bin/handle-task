@@ -80,10 +80,11 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_DIR/handle-task.log"
 }
 
-# Check if tab already created
-TAB_MARKER="$TASK_DIR/.tab-created"
-if [ -f "$TAB_MARKER" ]; then
-    log "Task already processed: $TASK_NAME"
+# Atomic check-and-create using mkdir (prevents race conditions)
+# mkdir fails if directory already exists, making it safe for concurrent access
+TAB_MARKER="$TASK_DIR/.tab-lock"
+if ! mkdir "$TAB_MARKER" 2>/dev/null; then
+    log "Task already being processed: $TASK_NAME"
     exit 0
 fi
 
@@ -161,9 +162,10 @@ echo "$user_prompt" > "$TASK_DIR/.user-prompt"
 display_name=$(truncate_tab_name "$TASK_NAME")
 window_name="🤖${display_name}"
 
-# Get window ID for reliable targeting
-window_id=$(tm new-window -t "$SESSION_NAME" -n "$window_name" -c "$WORK_DIR" -P -F "#{window_id}")
-touch "$TAB_MARKER"
+# Get window ID for reliable targeting (-d: don't switch focus to new window)
+window_id=$(tm new-window -d -t "$SESSION_NAME" -n "$window_name" -c "$WORK_DIR" -P -F "#{window_id}")
+# Save window_id for cleanup - store in lock directory
+echo "$window_id" > "$TAB_MARKER/window_id"
 
 sleep 0.5
 
@@ -237,6 +239,3 @@ fi
 send_to_claude "ultrathink Read and execute the task from $TASK_DIR/.user-prompt"
 
 log "Created window: $window_name, sent task to claude"
-
-# Kill the temporary "_" window if it exists
-tm kill-window -t "$SESSION_NAME:_" 2>/dev/null || true

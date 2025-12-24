@@ -44,7 +44,8 @@ taw/                           # 이 레포
         ├── attach             # 태스크 재연결 스크립트
         ├── origin             # -> 프로젝트 루트 (symlink)
         ├── worktree/          # git worktree (git 모드에서만 자동 생성)
-        ├── .tab-created       # 탭 생성 마커
+        ├── .tab-lock/         # 탭 생성 락 (atomic mkdir로 race condition 방지)
+        │   └── window_id      # tmux window ID (cleanup에서 사용)
         └── .pr                # PR 번호 (생성 시)
 ```
 
