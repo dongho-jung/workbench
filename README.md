@@ -31,7 +31,8 @@ taw/                           # 이 레포
     │   ├── setup              # 초기 설정 마법사
     │   ├── new-task           # 태스크 생성
     │   ├── handle-task        # 태스크 처리 (worktree 생성, agent 시작)
-    │   ├── end-task           # 태스크 완료 및 종료 (⌥ e) - commit/PR/merge/cleanup
+    │   ├── end-task           # 태스크 완료 로직 (commit/PR/merge/cleanup)
+    │   ├── end-task-ui        # 태스크 완료 UI (⌥ e) - user pane에서 진행상황 표시
     │   ├── attach             # 태스크 재연결
     │   ├── cleanup            # 정리 스크립트 (end-task에서 사용)
     │   ├── quick-task         # 빠른 태스크 큐 추가 (⌥ u)
@@ -221,7 +222,7 @@ brew install tmux gh
 | Pane 순환 | `⌥ Tab` |
 | Window 이동 | `⌥ ←/→` |
 | 새 태스크 | `⌥ n` |
-| 태스크 완료 | `⌥ e` (commit → PR/merge → cleanup, ON_COMPLETE에 따라) |
+| 태스크 완료 | `⌥ e` (user pane에서 진행상황 표시, commit → PR/merge → cleanup) |
 | 완료 태스크 일괄 머지 | `⌥ m` (✅ 상태 태스크 모두 merge + end) |
 | 팝업 쉘 | `⌥ p` (현재 worktree에서 쉘 열기/닫기) |
 | 빠른 태스크 큐 추가 | `⌥ u` (현재 태스크 완료 후 자동 처리) |
