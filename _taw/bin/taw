@@ -379,20 +379,15 @@ start_session() {
     tm bind -n M-q detach
     tm bind -n M-/ new-window -n "HELP" "less '$TAW_HOME/_taw/HELP.md'"
 
-    # Pane: Alt + up/down to move, Alt + hjkl to split, Alt + x to close
+    # Pane: Alt + up/down to move
     tm bind -n M-Up select-pane -U
     tm bind -n M-Down select-pane -D
-    tm bind -n M-h split-window -hb -c "#{pane_current_path}"
-    tm bind -n M-j split-window -v -c "#{pane_current_path}"
-    tm bind -n M-k split-window -vb -c "#{pane_current_path}"
-    tm bind -n M-l split-window -h -c "#{pane_current_path}"
-    tm bind -n M-x kill-pane
     log "Tmux configured"
 
     # Status line: 2 lines - windows on top, hints on bottom
     tm set -t "$SESSION_NAME" status 2
     tm set -t "$SESSION_NAME" status-format[0] "#[align=left]#{W:#[fg=white bg=default] #W #[default],#[fg=white bg=blue bold] #W #[default]}"
-    tm set -t "$SESSION_NAME" status-format[1] "#[align=left fg=brightblack] ⌥tab:pane  ⌥←→:window  ⌥x:close  ⌥n:new  ⌥e:end  ⌥p:popup  ⌥u:queue  ⌥q:quit  ⌥/:help"
+    tm set -t "$SESSION_NAME" status-format[1] "#[align=left fg=brightblack] ⌥tab:pane  ⌥←→:window  ⌥n:new  ⌥e:end  ⌥p:popup  ⌥u:queue  ⌥q:quit  ⌥/:help"
 
     # Run new-task in the initial window, then exit to close _ window
     debug "Running new-task in initial window..."

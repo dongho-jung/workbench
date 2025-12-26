@@ -35,7 +35,7 @@ taw/                           # 이 레포
     │   ├── attach             # 태스크 재연결
     │   ├── cleanup            # 정리 스크립트 (/done에서 사용)
     │   ├── quick-task         # 빠른 태스크 큐 추가 (⌥ u)
-    │   ├── popup-shell        # 팝업 쉘 토글 (⌥p로 열고/닫기, 사용자 셸 환경 로드)
+    │   ├── popup-shell        # 팝업 쉘 (⌥p로 열고, ⌥q로 닫기)
     │   ├── process-queue      # 큐 처리 (태스크 완료 후 자동 실행)
     │   ├── recover-task       # 손상된 태스크 복구/정리
     │   └── _common.sh         # 공통 유틸리티 (상수, 함수, 설정)
@@ -214,11 +214,9 @@ brew install tmux gh
 | Window 이동 | `⌥ ←/→` |
 | 새 태스크 | `⌥ n` |
 | 태스크 종료 | `⌥ e` (worktree/branch 정리 및 창 닫기) |
-| 팝업 쉘 토글 | `⌥ p` (열기/닫기, 사용자 셸 환경 로드) |
+| 팝업 쉘 | `⌥ p` (현재 worktree에서 쉘 열기/닫기) |
 | 빠른 태스크 큐 추가 | `⌥ u` (현재 태스크 완료 후 자동 처리) |
 | Pane 이동 (상/하) | `⌥ ↑/↓` |
-| Pane 분할 | `⌥ h/j/k/l` (좌/하/상/우) |
-| Pane 닫기 | `⌥ x` |
 | Session 나가기 | `⌥ q` (detach) |
 | 도움말 | `⌥ /` |
 
