@@ -25,8 +25,11 @@ Claude Code 기반 자율 에이전트 작업 환경
 
 ## Slash Commands (에이전트용)
 
+  /commit     스마트 커밋 (diff 분석 후 메시지 자동 생성)
+  /test       프로젝트 테스트 자동 감지 및 실행
   /pr         PR 자동 생성 및 브라우저 열기
   /merge      worktree 브랜치를 프로젝트 브랜치에 머지
+  /finish     태스크 완료 (commit → PR → 상태 업데이트)
   /done       태스크 정리 (worktree, branch, window 삭제)
 
 ## 디렉토리 구조

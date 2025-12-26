@@ -34,8 +34,11 @@ taw/                           # 이 레포
     │   ├── attach             # 태스크 재연결
     │   └── cleanup            # 정리 스크립트 (/done에서 사용)
     └── claude/commands/       # slash commands
+        ├── commit.md          # /commit - 스마트 커밋
+        ├── test.md            # /test - 테스트 실행
         ├── pr.md              # /pr - PR 생성
         ├── merge.md           # /merge - 브랜치 머지
+        ├── finish.md          # /finish - 태스크 완료
         └── done.md            # /done - 태스크 정리
 
 {any-project}/                 # 사용자 프로젝트 (git 또는 일반 디렉토리)
@@ -85,8 +88,11 @@ Agent가 사용할 수 있는 slash commands:
 
 | Command | 설명 |
 |---------|------|
+| `/commit` | 스마트 커밋 (diff 분석 후 메시지 자동 생성) |
+| `/test` | 프로젝트 테스트 자동 감지 및 실행 |
 | `/pr` | PR 자동 생성 및 브라우저 열기 |
 | `/merge` | worktree 브랜치를 프로젝트의 현재 브랜치에 머지 |
+| `/finish` | 태스크 완료 (commit → PR → 상태 업데이트) |
 | `/done` | 태스크 정리 (worktree, branch, 디렉토리, window) |
 
 ### Window 상태
