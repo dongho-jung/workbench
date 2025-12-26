@@ -32,7 +32,8 @@ taw/                           # 이 레포
     │   ├── handle-task        # 태스크 처리 (worktree 생성, agent 시작)
     │   ├── end-task           # 태스크 종료 (^x)
     │   ├── attach             # 태스크 재연결
-    │   └── cleanup            # 정리 스크립트 (/done에서 사용)
+    │   ├── cleanup            # 정리 스크립트 (/done에서 사용)
+    │   └── _common.sh         # 공통 유틸리티 (상수, 함수)
     └── claude/commands/       # slash commands
         ├── commit.md          # /commit - 스마트 커밋
         ├── test.md            # /test - 테스트 실행
@@ -94,6 +95,14 @@ Agent가 사용할 수 있는 slash commands:
 | `/merge` | worktree 브랜치를 프로젝트의 현재 브랜치에 머지 |
 | `/finish` | 태스크 완료 (commit → PR → 상태 업데이트) |
 | `/done` | 태스크 정리 (worktree, branch, 디렉토리, window) |
+
+### 불완전한 태스크 자동 재오픈
+
+태스크가 완료되지 않은 상태(done 처리되지 않음)에서 window가 닫히거나 tmux 세션이 종료된 경우, 다음에 `taw`를 실행하면 자동으로 해당 태스크들의 window를 다시 열어줍니다.
+
+- 새 세션 시작 시와 기존 세션 재연결 시 모두 자동으로 감지
+- Claude에 새로운 입력을 보내지 않고 이전 상태 그대로 복원
+- 수동으로 이어서 작업할 수 있도록 준비됨
 
 ### Window 상태
 

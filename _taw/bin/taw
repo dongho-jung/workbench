@@ -6,7 +6,7 @@
 
 set -e
 
-# Parse arguments
+# Parse arguments first (before sourcing _common.sh)
 TAW_DEBUG=0
 COMMAND=""
 while [[ $# -gt 0 ]]; do
@@ -27,15 +27,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Debug output function
-debug() {
-    if [ "$TAW_DEBUG" = "1" ]; then
-        echo "[DEBUG] $*" >&2
-    fi
-}
-
-# Resolve symlinks (macOS compatible)
-resolve_path() {
+# Resolve symlinks (needed to find TAW_HOME before sourcing _common.sh)
+_resolve_path() {
     local path="$1"
     while [ -L "$path" ]; do
         local dir="$(cd "$(dirname "$path")" && pwd)"
@@ -46,8 +39,11 @@ resolve_path() {
 }
 
 # Get the installation directory (where taw was installed from)
-SCRIPT_PATH="$(resolve_path "$0")"
+SCRIPT_PATH="$(_resolve_path "$0")"
 TAW_HOME="$(cd "$(dirname "$SCRIPT_PATH")/../.." && pwd)"
+
+# Source common utilities (provides debug, log, warn, tm, etc.)
+source "$TAW_HOME/_taw/bin/_common.sh"
 
 PROJECT_DIR="$(pwd)"
 TAW_DIR="$PROJECT_DIR/.taw"
@@ -58,9 +54,10 @@ LOG_FILE="$LOG_DIR/start.log"
 AGENTS_DIR="$TAW_DIR/agents"
 SESSION_NAME="$PROJECT_NAME"
 
-# Logging function
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+# Note: log(), debug(), warn() are now provided by _common.sh
+# Override tm() to use SESSION_NAME automatically (simpler than _common.sh version)
+tm() {
+    tmux -L "taw-$SESSION_NAME" "$@"
 }
 
 # Detect if current directory is a git repository root
@@ -167,10 +164,6 @@ is_session_running() {
     tmux -L "taw-$SESSION_NAME" has-session -t "$SESSION_NAME" 2>/dev/null
 }
 
-tm() {
-    tmux -L "taw-$SESSION_NAME" "$@"
-}
-
 # Full cleanup: remove everything taw-related for this project
 clean_all() {
     echo "=== TAW Clean ==="
@@ -273,6 +266,24 @@ clean_all() {
     echo "Done."
 }
 
+# Reopen incomplete tasks (tasks where window was closed but not done)
+reopen_incomplete_tasks() {
+    local incomplete_tasks
+    incomplete_tasks=$(find_incomplete_tasks "$AGENTS_DIR" "$SESSION_NAME")
+
+    [ -z "$incomplete_tasks" ] && return 0
+
+    echo "$incomplete_tasks" | while IFS= read -r agent_dir; do
+        [ -z "$agent_dir" ] && continue
+        local task_name=$(basename "$agent_dir")
+        log "Reopening incomplete task: $task_name"
+        debug "Reopening: $agent_dir"
+
+        # Use handle-task with --reopen --no-input flags
+        nohup "$TAW_HOME/_taw/bin/handle-task" --reopen --no-input "$agent_dir" >> "$LOG_DIR/handle-task.log" 2>&1 &
+    done
+}
+
 start_session() {
     check_dependencies
 
@@ -330,6 +341,10 @@ start_session() {
     debug "Running new-task in initial window..."
     tm send-keys -t "$SESSION_NAME:_" "$TAW_HOME/_taw/bin/new-task; exit" Enter
 
+    # Reopen any incomplete tasks from previous sessions
+    debug "Checking for incomplete tasks..."
+    reopen_incomplete_tasks
+
     # Attach to session
     log "Attaching to session"
     printf '\e]1;%s\a' "taw: $SESSION_NAME"
@@ -371,6 +386,11 @@ export TAW_HOME TAW_DEBUG
 if is_session_running; then
     log "Reattaching to existing session: $SESSION_NAME"
     echo "Attaching to existing session '$SESSION_NAME'..."
+
+    # Reopen any incomplete tasks
+    debug "Checking for incomplete tasks..."
+    reopen_incomplete_tasks
+
     printf '\e]1;%s\a' "taw: $SESSION_NAME"
     tm attach -t "$SESSION_NAME"
 else
