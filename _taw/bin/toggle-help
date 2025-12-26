@@ -2,6 +2,7 @@
 
 # Toggle help popup window
 # If help is open, close it. If closed, open it.
+# Uses tmux user option for reliable state tracking (same pattern as popup-shell)
 
 set -e
 
@@ -17,22 +18,22 @@ if [ -z "$TAW_HOME" ]; then
     TAW_HOME="$(cd "$SCRIPT_PATH/../.." && pwd)"
 fi
 
-# Lock file to track popup state (per session)
-LOCK_FILE="/tmp/taw-help-popup-${SESSION_NAME}.lock"
-
 # tmux helper
 tm() {
     tmux -L "taw-$SESSION_NAME" "$@"
 }
 
-if [ -f "$LOCK_FILE" ]; then
+# Check if help popup is currently open (using tmux user option)
+HELP_OPEN=$(tm show-options -gqv @taw_help_open 2>/dev/null || echo "")
+
+if [ "$HELP_OPEN" = "1" ]; then
     # Help is currently shown - close it
-    rm -f "$LOCK_FILE"
+    tm set-option -g @taw_help_open ""
     tm display-popup -C 2>/dev/null || true
 else
     # Help is not shown - open it
-    touch "$LOCK_FILE"
-    # Note: The lock file is removed when less exits (user presses q or popup is closed)
+    tm set-option -g @taw_help_open "1"
+    # When less exits (user presses q or popup is closed), clean up the state
     tm display-popup -E -w 80% -h 80% -T " Help (⌥/ to close) " \
-        "less '$TAW_HOME/_taw/HELP.md'; rm -f '$LOCK_FILE'"
+        "less '$TAW_HOME/_taw/HELP.md'; tmux -L 'taw-$SESSION_NAME' set-option -g @taw_help_open '' 2>/dev/null || true"
 fi
