@@ -11,7 +11,8 @@ PROJECT_DIR   - Original project root
 WORKTREE_DIR  - Your isolated working directory (git worktree)
 WINDOW_ID     - tmux window ID for status updates
 ON_COMPLETE   - Task completion mode: auto-merge | auto-pr | auto-commit | confirm
-TAW_HOME      - TAW installation directory (for calling scripts)
+TAW_HOME      - TAW installation directory
+TAW_BIN       - TAW binary path (for calling commands)
 SESSION_NAME  - tmux session name
 ```
 
@@ -81,7 +82,7 @@ echo "ON_COMPLETE=$ON_COMPLETE"  # 먼저 확인
 3. Log: "작업 완료 - end-task 호출"
 4. **end-task 호출** (이게 merge, cleanup, window 닫기를 자동으로 처리):
    ```bash
-   "$TAW_HOME/_taw/bin/end-task" "$SESSION_NAME" "$WINDOW_ID"
+   "$TAW_BIN" internal end-task "$SESSION_NAME" "$WINDOW_ID"
    ```
 
 **CRITICAL**: `auto-merge`에서는 PR 생성 안 함! end-task가 자동으로 main에 merge하고 정리합니다.
