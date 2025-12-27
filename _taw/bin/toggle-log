@@ -3,7 +3,7 @@
 # Toggle live log popup window
 # If log popup is open, close it. If closed, open it.
 # Uses tmux user option for reliable state tracking
-# Shows tail -f style log with scroll capability using less +F
+# Uses custom log-viewer with vim-like navigation
 
 set -e
 
@@ -74,12 +74,14 @@ else
     tm set-option -g @taw_log_open ""
     tm set-option -g @taw_log_open "1"
 
-    # Use less +F for tail -f like behavior with scroll capability
-    # Press Ctrl+C to stop following, then can scroll with j/k/arrows
-    # Press F to resume following
-    # Alt+L (\el) and q to quit
-    # Create lesskey configuration inside the popup command
-    # Note: The cleanup command runs when less exits (naturally or via key binding)
-    tm display-popup -E -w 90% -h 80% -T " Live Log (F=follow, Ctrl+C=scroll, ⌥l or q to close) " \
-        "KEYFILE=\$(mktemp) && printf '#command\n\\\\el quit\n' > \"\$KEYFILE\" && LESSKEYIN=\"\$KEYFILE\" less +F '$LOG_FILE'; tmux -L 'taw-$SESSION_NAME' set-option -g @taw_log_open '' 2>/dev/null || true; rm -f \"\$KEYFILE\" 2>/dev/null || true"
+    # Use custom log-viewer with full features:
+    # - j/k or arrows: scroll up/down
+    # - g/G: go to top/bottom
+    # - /: search, n/N: next/prev match
+    # - f: highlight word
+    # - F: filter lines
+    # - s: toggle tail mode
+    # - q, Esc, Alt+L: quit
+    tm display-popup -E -w 90% -h 80% -T " Log Viewer (j/k:scroll g/G:top/btm /:search f:highlight F:filter s:tail q:quit) " \
+        "'$TAW_HOME/_taw/bin/log-viewer' '$LOG_FILE' '$SESSION_NAME'"
 fi

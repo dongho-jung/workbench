@@ -1,0 +1,451 @@
+#!/bin/bash
+
+# TAW Log Viewer - Interactive log file viewer with vim-like navigation
+#
+# Features:
+#   - Arrow up/down or j/k: Scroll up/down
+#   - g/G: Go to top/bottom
+#   - /: Search (enter pattern)
+#   - n/N: Next/previous search result
+#   - f: Highlight a word (toggle)
+#   - F: Filter to show only lines containing a word
+#   - s: Toggle tail (follow) mode
+#   - q, Esc, or Alt+L: Quit
+
+LOG_FILE="${1:-}"
+SESSION_NAME="${2:-}"
+
+if [ -z "$LOG_FILE" ]; then
+    echo "Usage: log-viewer LOG_FILE [SESSION_NAME]" >&2
+    exit 1
+fi
+
+if [ ! -f "$LOG_FILE" ]; then
+    echo "Error: Log file not found: $LOG_FILE" >&2
+    exit 1
+fi
+
+# Terminal setup
+cleanup() {
+    tput cnorm 2>/dev/null || true  # Show cursor
+    stty "$SAVED_STTY" 2>/dev/null || true
+    tput rmcup 2>/dev/null || true  # Restore screen
+
+    # Clear tmux state if session provided
+    if [ -n "$SESSION_NAME" ]; then
+        tmux -L "taw-$SESSION_NAME" set-option -g @taw_log_open '' 2>/dev/null || true
+    fi
+}
+
+trap cleanup EXIT INT TERM
+
+# Save terminal state and setup raw mode
+SAVED_STTY=$(stty -g 2>/dev/null || echo "")
+stty raw -echo min 0 time 5 2>/dev/null || true  # 0.5s timeout for read
+tput smcup 2>/dev/null || true  # Alternative screen
+tput civis 2>/dev/null || true  # Hide cursor
+
+# State variables
+SCROLL_POS=0
+SEARCH_PATTERN=""
+HIGHLIGHT_WORD=""
+FILTER_WORD=""
+TAIL_MODE=true
+FILE_MTIME=""
+
+# Get terminal dimensions
+get_dimensions() {
+    TERM_LINES=$(tput lines 2>/dev/null || echo 24)
+    TERM_COLS=$(tput cols 2>/dev/null || echo 80)
+    CONTENT_LINES=$((TERM_LINES - 2))  # Reserve 2 lines for status bar
+}
+
+# Load log file into arrays
+load_file() {
+    local i=0
+    unset LINES_CACHE
+    declare -ga LINES_CACHE=()
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        LINES_CACHE[i]="$line"
+        ((i++)) || true
+    done < "$LOG_FILE"
+
+    FILE_MTIME=$(stat -f%m "$LOG_FILE" 2>/dev/null || stat -c%Y "$LOG_FILE" 2>/dev/null || echo "0")
+}
+
+# Apply filter if set
+apply_filter() {
+    local i=0
+    unset FILTERED_LINES
+    declare -ga FILTERED_LINES=()
+
+    if [ -z "$FILTER_WORD" ]; then
+        for line in "${LINES_CACHE[@]}"; do
+            FILTERED_LINES[i]="$line"
+            ((i++)) || true
+        done
+    else
+        for line in "${LINES_CACHE[@]}"; do
+            if [[ "$line" == *"$FILTER_WORD"* ]]; then
+                FILTERED_LINES[i]="$line"
+                ((i++)) || true
+            fi
+        done
+    fi
+}
+
+# Find all search matches in current (filtered) lines
+find_matches() {
+    local idx=0
+    unset SEARCH_MATCHES
+    declare -ga SEARCH_MATCHES=()
+    CURRENT_MATCH_IDX=-1
+
+    if [ -z "$SEARCH_PATTERN" ]; then
+        return
+    fi
+
+    for line in "${FILTERED_LINES[@]}"; do
+        if [[ "$line" == *"$SEARCH_PATTERN"* ]]; then
+            SEARCH_MATCHES+=("$idx")
+        fi
+        ((idx++)) || true
+    done
+}
+
+# Move cursor position
+move() {
+    printf '\033[%d;%dH' "$1" "$2"
+}
+
+# Clear screen
+clear_screen() {
+    printf '\033[2J'
+    move 1 1
+}
+
+# Highlight text in a line and truncate if needed
+highlight_line() {
+    local line="$1"
+    local max_len=$((TERM_COLS - 1))
+
+    # Truncate if too long
+    if [ ${#line} -gt $max_len ]; then
+        line="${line:0:$((max_len - 3))}..."
+    fi
+
+    # Escape special characters for sed
+    local esc_search=$(printf '%s' "$SEARCH_PATTERN" | sed 's/[&/\]/\\&/g' 2>/dev/null || echo "")
+    local esc_highlight=$(printf '%s' "$HIGHLIGHT_WORD" | sed 's/[&/\]/\\&/g' 2>/dev/null || echo "")
+
+    # Apply highlighting
+    local result="$line"
+
+    # Highlight search pattern (red background)
+    if [ -n "$SEARCH_PATTERN" ] && [ -n "$esc_search" ]; then
+        result=$(printf '%s' "$result" | sed "s/$esc_search/\x1b[41m&\x1b[0m/g" 2>/dev/null || printf '%s' "$result")
+    fi
+
+    # Highlight word (yellow background)
+    if [ -n "$HIGHLIGHT_WORD" ] && [ -n "$esc_highlight" ]; then
+        result=$(printf '%s' "$result" | sed "s/$esc_highlight/\x1b[43m\x1b[30m&\x1b[0m/g" 2>/dev/null || printf '%s' "$result")
+    fi
+
+    printf '%s' "$result"
+}
+
+# Draw status bar
+draw_status() {
+    local total=${#FILTERED_LINES[@]}
+    local end_pos=$((SCROLL_POS + CONTENT_LINES))
+    [ $end_pos -gt $total ] && end_pos=$total
+    [ $total -eq 0 ] && end_pos=0
+
+    # Status bar line 1 (bottom - 1)
+    move $((TERM_LINES - 1)) 1
+    printf '\033[7m'  # Inverse video
+
+    local status=""
+    if [ "$TAIL_MODE" = true ]; then
+        status="[TAIL] "
+    fi
+
+    if [ -n "$FILTER_WORD" ]; then
+        status="${status}[Filter: $FILTER_WORD] "
+    fi
+
+    if [ -n "$HIGHLIGHT_WORD" ]; then
+        status="${status}[HL: $HIGHLIGHT_WORD] "
+    fi
+
+    if [ -n "$SEARCH_PATTERN" ]; then
+        local match_info=""
+        if [ ${#SEARCH_MATCHES[@]} -gt 0 ]; then
+            match_info=" ($((CURRENT_MATCH_IDX + 1))/${#SEARCH_MATCHES[@]})"
+        fi
+        status="${status}[Search: $SEARCH_PATTERN$match_info] "
+    fi
+
+    local start_line=0
+    [ $total -gt 0 ] && start_line=$((SCROLL_POS + 1))
+    local pos_info="Lines $start_line-$end_pos of $total"
+
+    printf "%-${TERM_COLS}s" "$status$pos_info"
+    printf '\033[0m'
+
+    # Help line (bottom)
+    move $TERM_LINES 1
+    printf '\033[2m'  # Dim
+    local help="j/k:scroll  g/G:top/btm  /:search  n/N:next/prev  f:highlight  F:filter  s:tail  q:quit"
+    printf "%-${TERM_COLS}s" "$help"
+    printf '\033[0m'
+}
+
+# Draw content
+draw_content() {
+    local total=${#FILTERED_LINES[@]}
+    local start=$SCROLL_POS
+    local end=$((start + CONTENT_LINES))
+
+    if [ $end -gt $total ]; then
+        end=$total
+    fi
+
+    local i
+    for ((i = 0; i < CONTENT_LINES; i++)); do
+        move $((i + 1)) 1
+        printf '\033[K'  # Clear line
+
+        local line_idx=$((start + i))
+        if [ $line_idx -lt $total ]; then
+            highlight_line "${FILTERED_LINES[$line_idx]}"
+        fi
+    done
+}
+
+# Full redraw
+redraw() {
+    get_dimensions
+    draw_content
+    draw_status
+}
+
+# Prompt for input (search, filter, highlight)
+prompt_input() {
+    local prompt_text="$1"
+
+    move $TERM_LINES 1
+    printf '\033[K'
+    printf '\033[7m%s\033[0m' "$prompt_text"
+
+    # Temporarily enable echo for input
+    stty -raw echo 2>/dev/null || true
+    tput cnorm 2>/dev/null || true  # Show cursor
+
+    local input=""
+    read -r input 2>/dev/null || true
+
+    tput civis 2>/dev/null || true  # Hide cursor
+    stty raw -echo min 0 time 5 2>/dev/null || true
+
+    printf '%s' "$input"
+}
+
+# Jump to next/previous match
+jump_to_match() {
+    local direction="$1"  # 1 for next, -1 for previous
+
+    if [ ${#SEARCH_MATCHES[@]} -eq 0 ]; then
+        return
+    fi
+
+    if [ "$direction" -eq 1 ]; then
+        CURRENT_MATCH_IDX=$(( (CURRENT_MATCH_IDX + 1) % ${#SEARCH_MATCHES[@]} ))
+    else
+        CURRENT_MATCH_IDX=$(( (CURRENT_MATCH_IDX - 1 + ${#SEARCH_MATCHES[@]}) % ${#SEARCH_MATCHES[@]} ))
+    fi
+
+    local match_line=${SEARCH_MATCHES[$CURRENT_MATCH_IDX]}
+
+    # Scroll to show match
+    if [ $match_line -lt $SCROLL_POS ] || [ $match_line -ge $((SCROLL_POS + CONTENT_LINES)) ]; then
+        SCROLL_POS=$((match_line - CONTENT_LINES / 2))
+        [ $SCROLL_POS -lt 0 ] && SCROLL_POS=0
+        local max=$((${#FILTERED_LINES[@]} - CONTENT_LINES))
+        [ $max -lt 0 ] && max=0
+        [ $SCROLL_POS -gt $max ] && SCROLL_POS=$max
+    fi
+
+    TAIL_MODE=false
+}
+
+# Scroll to end (tail mode behavior)
+scroll_to_end() {
+    get_dimensions
+    local total=${#FILTERED_LINES[@]}
+    local max=$((total - CONTENT_LINES))
+    [ $max -lt 0 ] && max=0
+    SCROLL_POS=$max
+}
+
+# Check if file was updated
+check_file_update() {
+    local new_mtime
+    new_mtime=$(stat -f%m "$LOG_FILE" 2>/dev/null || stat -c%Y "$LOG_FILE" 2>/dev/null || echo "0")
+
+    if [ "$new_mtime" != "$FILE_MTIME" ]; then
+        return 0  # File changed
+    fi
+    return 1  # No change
+}
+
+# Main loop
+main() {
+    get_dimensions
+    load_file
+    apply_filter
+    find_matches
+    scroll_to_end
+    clear_screen
+    redraw
+
+    while true; do
+        # Check for file updates in tail mode
+        if [ "$TAIL_MODE" = true ]; then
+            if check_file_update; then
+                load_file
+                apply_filter
+                find_matches
+                scroll_to_end
+                redraw
+            fi
+        fi
+
+        # Read key (with timeout from stty settings)
+        local key=""
+        IFS= read -r -n1 key 2>/dev/null || true
+
+        if [ -z "$key" ]; then
+            # Timeout - redraw status if in tail mode (for file updates)
+            continue
+        fi
+
+        # Handle escape sequences
+        if [ "$key" = $'\033' ]; then
+            local seq1="" seq2=""
+            IFS= read -r -n1 -t 0.01 seq1 2>/dev/null || true
+
+            if [ "$seq1" = "[" ]; then
+                IFS= read -r -n1 -t 0.01 seq2 2>/dev/null || true
+                case "$seq2" in
+                    A) key="UP" ;;
+                    B) key="DOWN" ;;
+                    H) key="HOME" ;;
+                    F) key="END" ;;
+                    5) IFS= read -r -n1 -t 0.01 _ 2>/dev/null; key="PGUP" ;;
+                    6) IFS= read -r -n1 -t 0.01 _ 2>/dev/null; key="PGDN" ;;
+                    *) key="ESC" ;;
+                esac
+            elif [ "$seq1" = "l" ] || [ "$seq1" = "L" ]; then
+                # Alt+L (M-l)
+                key="QUIT"
+            elif [ -z "$seq1" ]; then
+                key="ESC"
+            else
+                key="ESC"
+            fi
+        fi
+
+        case "$key" in
+            q|Q|ESC|QUIT)
+                break
+                ;;
+            j|DOWN)
+                TAIL_MODE=false
+                local max=$((${#FILTERED_LINES[@]} - CONTENT_LINES))
+                [ $max -lt 0 ] && max=0
+                [ $SCROLL_POS -lt $max ] && ((SCROLL_POS++))
+                redraw
+                ;;
+            k|UP)
+                TAIL_MODE=false
+                [ $SCROLL_POS -gt 0 ] && ((SCROLL_POS--))
+                redraw
+                ;;
+            g|HOME)
+                TAIL_MODE=false
+                SCROLL_POS=0
+                redraw
+                ;;
+            G|END)
+                scroll_to_end
+                redraw
+                ;;
+            PGUP)
+                TAIL_MODE=false
+                SCROLL_POS=$((SCROLL_POS - CONTENT_LINES))
+                [ $SCROLL_POS -lt 0 ] && SCROLL_POS=0
+                redraw
+                ;;
+            PGDN)
+                local max=$((${#FILTERED_LINES[@]} - CONTENT_LINES))
+                [ $max -lt 0 ] && max=0
+                SCROLL_POS=$((SCROLL_POS + CONTENT_LINES))
+                [ $SCROLL_POS -gt $max ] && SCROLL_POS=$max
+                redraw
+                ;;
+            /)
+                local pattern
+                pattern=$(prompt_input "Search: ")
+                SEARCH_PATTERN="$pattern"
+                find_matches
+                if [ ${#SEARCH_MATCHES[@]} -gt 0 ]; then
+                    CURRENT_MATCH_IDX=-1
+                    jump_to_match 1
+                fi
+                redraw
+                ;;
+            n)
+                jump_to_match 1
+                redraw
+                ;;
+            N)
+                jump_to_match -1
+                redraw
+                ;;
+            f)
+                local word
+                word=$(prompt_input "Highlight word (empty to clear): ")
+                HIGHLIGHT_WORD="$word"
+                redraw
+                ;;
+            F)
+                local word
+                word=$(prompt_input "Filter word (empty to clear): ")
+                FILTER_WORD="$word"
+                apply_filter
+                find_matches
+                SCROLL_POS=0
+                if [ "$TAIL_MODE" = true ]; then
+                    scroll_to_end
+                fi
+                redraw
+                ;;
+            s|S)
+                if [ "$TAIL_MODE" = true ]; then
+                    TAIL_MODE=false
+                else
+                    TAIL_MODE=true
+                    load_file
+                    apply_filter
+                    find_matches
+                    scroll_to_end
+                fi
+                redraw
+                ;;
+        esac
+    done
+}
+
+main
