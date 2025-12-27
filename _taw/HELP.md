@@ -31,11 +31,11 @@ Claude Code 기반 자율 에이전트 작업 환경
 
   .taw/
   ├── PROMPT.md              프로젝트별 에이전트 지시사항
+  ├── log                    통합 로그 파일
   ├── new-task               태스크 생성 스크립트
   ├── .queue/                빠른 태스크 큐 (⌥u로 추가)
   └── agents/{task-name}/
       ├── task               태스크 내용
-      ├── log                진행 로그
       ├── attach             태스크 재연결 (./attach 실행)
       ├── origin/            프로젝트 루트 (symlink)
       └── worktree/          git worktree (자동 생성)

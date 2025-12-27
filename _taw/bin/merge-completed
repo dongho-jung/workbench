@@ -24,12 +24,11 @@ fi
 PROJECT_DIR="$(pwd)"
 TAW_DIR="$PROJECT_DIR/.taw"
 AGENTS_DIR="$TAW_DIR/agents"
-LOG_FILE="$TAW_DIR/.metadata/log/merge-completed.log"
 
-# Ensure log directory exists
-mkdir -p "$(dirname "$LOG_FILE")"
+# Initialize logging
+init_logging "$TAW_DIR" "merge-completed"
 
-log "=== Merge completed tasks ===" "$LOG_FILE"
+log "=== Merge completed tasks ==="
 
 # Check if this is git mode
 IS_GIT_MODE=false
@@ -38,7 +37,7 @@ if [ -f "$TAW_DIR/.is-git-repo" ]; then
 fi
 
 if [ "$IS_GIT_MODE" = false ]; then
-    log "Non-git mode, skipping" "$LOG_FILE"
+    log "Non-git mode, skipping"
     echo "Not a git repository. Merge is only available in git mode."
     exit 0
 fi
@@ -46,25 +45,25 @@ fi
 # Get current branch in PROJECT_DIR (where we'll merge to)
 MAIN_BRANCH=$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null)
 if [ -z "$MAIN_BRANCH" ]; then
-    log "Could not determine main branch" "$LOG_FILE"
+    log "Could not determine main branch"
     echo "Error: Could not determine current branch"
     exit 1
 fi
 
-log "Main branch: $MAIN_BRANCH" "$LOG_FILE"
+log "Main branch: $MAIN_BRANCH"
 
 # Find all windows with ✅ status
 COMPLETED_WINDOWS=$(tm "$SESSION_NAME" list-windows -F "#{window_id}:#{window_name}" 2>/dev/null | grep "^@.*:✅" || true)
 
 if [ -z "$COMPLETED_WINDOWS" ]; then
-    log "No completed tasks found" "$LOG_FILE"
+    log "No completed tasks found"
     echo "No completed tasks (✅) found."
     exit 0
 fi
 
 # Count completed tasks
 COMPLETED_COUNT=$(echo "$COMPLETED_WINDOWS" | wc -l | tr -d ' ')
-log "Found $COMPLETED_COUNT completed task(s)" "$LOG_FILE"
+log "Found $COMPLETED_COUNT completed task(s)"
 
 echo "Found $COMPLETED_COUNT completed task(s) to merge and end."
 echo ""
@@ -80,23 +79,23 @@ while IFS=: read -r window_id window_name; do
     task_name=$(echo "$window_name" | sed 's/^✅//')
 
     echo "Processing: $task_name"
-    log "Processing task: $task_name (window: $window_id)" "$LOG_FILE"
+    log "Processing task: $task_name (window: $window_id)"
 
     # Check if branch exists
     if ! git -C "$PROJECT_DIR" rev-parse --verify "$task_name" &>/dev/null; then
         echo "  ⚠️  Branch '$task_name' not found, skipping merge"
-        log "Branch not found: $task_name" "$LOG_FILE"
+        log "Branch not found: $task_name"
         # Still end the task
     else
         # Merge the branch
         echo "  Merging $task_name -> $MAIN_BRANCH..."
-        if git -C "$PROJECT_DIR" merge "$task_name" --no-ff -m "Merge branch '$task_name'" 2>> "$LOG_FILE"; then
+        if git -C "$PROJECT_DIR" merge "$task_name" --no-ff -m "Merge branch '$task_name'" 2>> "$TAW_DIR/log"; then
             echo "  ✓ Merged successfully"
-            log "Merged successfully: $task_name" "$LOG_FILE"
+            log "Merged successfully: $task_name"
             MERGED_COUNT=$((MERGED_COUNT + 1))
         else
             echo "  ✗ Merge failed (conflicts?)"
-            log "Merge failed: $task_name" "$LOG_FILE"
+            log "Merge failed: $task_name"
             FAILED_COUNT=$((FAILED_COUNT + 1))
             # Abort the merge and continue with next task
             git -C "$PROJECT_DIR" merge --abort 2>/dev/null || true
@@ -106,9 +105,9 @@ while IFS=: read -r window_id window_name; do
 
     # End the task (cleanup)
     echo "  Cleaning up..."
-    "$TAW_HOME/_taw/bin/end-task" "$SESSION_NAME" "$window_id" --force >> "$LOG_FILE" 2>&1 || true
+    "$TAW_HOME/_taw/bin/end-task" "$SESSION_NAME" "$window_id" --force >> "$TAW_DIR/log" 2>&1 || true
     echo "  ✓ Task ended"
-    log "Task ended: $task_name" "$LOG_FILE"
+    log "Task ended: $task_name"
 
 done <<< "$COMPLETED_WINDOWS"
 
@@ -116,4 +115,4 @@ echo ""
 echo "=== Summary ==="
 echo "Merged: $MERGED_COUNT"
 echo "Failed: $FAILED_COUNT"
-log "Summary: merged=$MERGED_COUNT, failed=$FAILED_COUNT" "$LOG_FILE"
+log "Summary: merged=$MERGED_COUNT, failed=$FAILED_COUNT"

@@ -52,17 +52,16 @@ fi
 TAW_DIR="$PROJECT_DIR/.taw"
 AGENT_DIR="$TAW_DIR/agents/$TASK_NAME"
 WORKTREE_DIR="$AGENT_DIR/worktree"
-LOG_FILE="$TAW_DIR/.metadata/log/end-task.log"
 
-# Ensure log directory exists
-mkdir -p "$(dirname "$LOG_FILE")"
+# Initialize logging
+init_logging "$TAW_DIR" "end-task" "$TASK_NAME"
 
-log "=== End task: $TASK_NAME ===" "$LOG_FILE"
+log "=== End task ==="
 debug "PROJECT_DIR=$PROJECT_DIR, AGENT_DIR=$AGENT_DIR"
 
 # Check if agent directory exists
 if [ ! -d "$AGENT_DIR" ]; then
-    log "Agent directory not found: $AGENT_DIR" "$LOG_FILE"
+    log "Agent directory not found: $AGENT_DIR"
     # Just close the window
     tm "$SESSION_NAME" kill-window -t "$WINDOW_ID" 2>/dev/null || true
     exit 0
@@ -76,7 +75,7 @@ fi
 
 # Get ON_COMPLETE setting
 ON_COMPLETE=$(read_config "$TAW_DIR" "on_complete" "$DEFAULT_ON_COMPLETE")
-log "ON_COMPLETE=$ON_COMPLETE" "$LOG_FILE"
+log "ON_COMPLETE=$ON_COMPLETE"
 
 # Get work directory (worktree or project dir)
 WORK_DIR="$PROJECT_DIR"
@@ -90,7 +89,7 @@ if [ "$IS_GIT_MODE" = true ] && [ "$FORCE_MODE" != "--force" ] && [ -d "$WORK_DI
 
     # Check for uncommitted changes
     if [ -n "$(git status -s 2>/dev/null)" ]; then
-        log "Found uncommitted changes, committing..." "$LOG_FILE"
+        log "Found uncommitted changes, committing..."
 
         # Stage all changes
         git add -A
@@ -103,7 +102,7 @@ if [ "$IS_GIT_MODE" = true ] && [ "$FORCE_MODE" != "--force" ] && [ -d "$WORK_DI
 
 $DIFF_STAT" 2>/dev/null || true
 
-        log "Changes committed" "$LOG_FILE"
+        log "Changes committed"
     fi
 fi
 
@@ -115,7 +114,7 @@ if [ "$IS_GIT_MODE" = true ] && [ "$FORCE_MODE" != "--force" ] && [ -d "$WORK_DI
 
     case "$ON_COMPLETE" in
         auto-merge)
-            log "auto-merge: pushing and merging..." "$LOG_FILE"
+            log "auto-merge: pushing and merging..."
 
             # Push branch
             git push -u origin "$TASK_NAME" 2>/dev/null || true
@@ -131,7 +130,7 @@ if [ "$IS_GIT_MODE" = true ] && [ "$FORCE_MODE" != "--force" ] && [ -d "$WORK_DI
 
             # Checkout main branch in PROJECT_DIR
             if ! git -C "$PROJECT_DIR" checkout "$MAIN_BRANCH" 2>/dev/null; then
-                log "Failed to checkout $MAIN_BRANCH" "$LOG_FILE"
+                log "Failed to checkout $MAIN_BRANCH"
                 tm "$SESSION_NAME" display-message "Failed to checkout $MAIN_BRANCH. Resolve manually."
                 exit 0
             fi
@@ -142,18 +141,18 @@ if [ "$IS_GIT_MODE" = true ] && [ "$FORCE_MODE" != "--force" ] && [ -d "$WORK_DI
             if git -C "$PROJECT_DIR" merge "$TASK_NAME" --no-ff -m "Merge branch '$TASK_NAME'" 2>/dev/null; then
                 git -C "$PROJECT_DIR" push origin "$MAIN_BRANCH" 2>/dev/null || true
                 MERGED=true
-                log "Merged to $MAIN_BRANCH" "$LOG_FILE"
+                log "Merged to $MAIN_BRANCH"
             else
                 # Merge conflict - abort, notify, and EXIT (don't cleanup)
                 git -C "$PROJECT_DIR" merge --abort 2>/dev/null || true
-                log "Merge conflict, stopping without cleanup" "$LOG_FILE"
+                log "Merge conflict, stopping without cleanup"
                 tm "$SESSION_NAME" display-message "Merge conflict! Resolve manually or use ⌥ e --force to skip"
                 exit 0
             fi
             ;;
 
         auto-pr)
-            log "auto-pr: pushing and creating PR..." "$LOG_FILE"
+            log "auto-pr: pushing and creating PR..."
 
             # Push branch
             git push -u origin "$TASK_NAME" 2>/dev/null || true
@@ -171,10 +170,10 @@ $(git log --oneline origin/main..$TASK_NAME 2>/dev/null || echo "- See commits")
                 if gh pr create --title "$PR_TITLE" --body "$PR_BODY" 2>/dev/null; then
                     # Save PR number
                     gh pr view --json number -q '.number' > "$AGENT_DIR/.pr" 2>/dev/null || true
-                    log "PR created" "$LOG_FILE"
+                    log "PR created"
                 fi
             else
-                log "PR already exists" "$LOG_FILE"
+                log "PR already exists"
             fi
 
             # Check if PR is merged
@@ -189,7 +188,7 @@ $(git log --oneline origin/main..$TASK_NAME 2>/dev/null || echo "- See commits")
             ;;
 
         auto-commit|confirm|*)
-            log "Pushing branch..." "$LOG_FILE"
+            log "Pushing branch..."
             # Just push the branch
             git push -u origin "$TASK_NAME" 2>/dev/null || true
             ;;
@@ -205,7 +204,7 @@ if [ "$IS_GIT_MODE" = true ] && [ "$FORCE_MODE" != "--force" ] && [ "$MERGED" = 
         PR_STATE=$(gh pr view "$PR_NUMBER" --json merged -q '.merged' 2>/dev/null || echo "false")
         if [ "$PR_STATE" = "true" ]; then
             MERGED=true
-            log "PR #$PR_NUMBER is merged" "$LOG_FILE"
+            log "PR #$PR_NUMBER is merged"
         fi
     fi
 
@@ -214,13 +213,13 @@ if [ "$IS_GIT_MODE" = true ] && [ "$FORCE_MODE" != "--force" ] && [ "$MERGED" = 
         git -C "$PROJECT_DIR" fetch origin main 2>/dev/null || true
         if git -C "$PROJECT_DIR" branch --merged main 2>/dev/null | grep -q "\\b$TASK_NAME\\b"; then
             MERGED=true
-            log "Branch $TASK_NAME is merged to main" "$LOG_FILE"
+            log "Branch $TASK_NAME is merged to main"
         fi
     fi
 
     # If not merged and not auto-merge mode, ask for confirmation
     if [ "$MERGED" = false ] && [ "$ON_COMPLETE" != "auto-merge" ]; then
-        log "Task not merged, requesting confirmation" "$LOG_FILE"
+        log "Task not merged, requesting confirmation"
         tm "$SESSION_NAME" confirm-before -p "Task '$TASK_NAME' is NOT merged. Delete anyway? (y/n)" \
             "run-shell '$TAW_HOME/_taw/bin/end-task \"$SESSION_NAME\" \"$WINDOW_ID\" --force'"
         exit 0
@@ -228,7 +227,7 @@ if [ "$IS_GIT_MODE" = true ] && [ "$FORCE_MODE" != "--force" ] && [ "$MERGED" = 
 fi
 
 # === Step 4: Cleanup ===
-log "Starting cleanup" "$LOG_FILE"
+log "Starting cleanup"
 
 # 1. Kill claude process (send Ctrl+C)
 debug "Stopping claude..."
@@ -244,7 +243,7 @@ cleanup_task "$TASK_NAME" "$PROJECT_DIR" "$AGENT_DIR" "$IS_GIT_MODE"
 debug "Closing window..."
 tm "$SESSION_NAME" kill-window -t "$WINDOW_ID" 2>/dev/null || true
 
-log "Cleanup completed" "$LOG_FILE"
+log "Cleanup completed"
 
 # 4. Process queue (start next queued task if any)
 debug "Checking queue for next task..."

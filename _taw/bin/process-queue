@@ -33,10 +33,9 @@ fi
 TAW_DIR="$PROJECT_DIR/.taw"
 QUEUE_DIR="$TAW_DIR/.queue"
 AGENTS_DIR="$TAW_DIR/agents"
-LOG_DIR="$TAW_DIR/.metadata/log"
-LOG_FILE="$LOG_DIR/queue.log"
 
-mkdir -p "$LOG_DIR"
+# Initialize logging
+init_logging "$TAW_DIR" "process-queue"
 
 # Check if queue has tasks
 if [ ! -d "$QUEUE_DIR" ] || [ -z "$(ls -A "$QUEUE_DIR" 2>/dev/null)" ]; then
@@ -55,12 +54,12 @@ fi
 # Read task content
 TASK_CONTENT=$(cat "$NEXT_TASK_FILE")
 if [ -z "$TASK_CONTENT" ]; then
-    log "Empty task file, removing: $NEXT_TASK_FILE" "$LOG_FILE"
+    log "Empty task file, removing: $NEXT_TASK_FILE"
     rm -f "$NEXT_TASK_FILE"
     exit 0
 fi
 
-log "Processing queued task: $TASK_CONTENT" "$LOG_FILE"
+log "Processing queued task: $TASK_CONTENT"
 
 # Generate task name from content (use claude if available, otherwise simple hash)
 # For simplicity, create a short slug from content
@@ -88,14 +87,14 @@ mkdir -p "$TASK_DIR"
 echo "$TASK_CONTENT" > "$TASK_DIR/task"
 touch "$TASK_DIR/log"
 
-log "Created task directory: $TASK_DIR" "$LOG_FILE"
+log "Created task directory: $TASK_DIR"
 
 # Remove processed task from queue
 rm -f "$NEXT_TASK_FILE"
-log "Removed from queue: $NEXT_TASK_FILE" "$LOG_FILE"
+log "Removed from queue: $NEXT_TASK_FILE"
 
 # Run handle-task to start the agent
-log "Starting handle-task for: $TASK_NAME" "$LOG_FILE"
+log "Starting handle-task for: $TASK_NAME"
 "$TAW_HOME/_taw/bin/handle-task" "$TASK_DIR" &
 
 echo "Started queued task: $TASK_NAME"

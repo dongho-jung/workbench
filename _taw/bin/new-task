@@ -15,8 +15,6 @@ export TAW_HOME  # Export for child processes (handle-task)
 PROJECT_DIR="$(pwd)"
 TAW_DIR="$PROJECT_DIR/.taw"
 AGENTS_DIR="$TAW_DIR/agents"
-LOG_DIR="$TAW_DIR/.metadata/log"
-LOG_FILE="$LOG_DIR/new-task.log"
 
 # Check if .taw directory exists
 if [ ! -d "$TAW_DIR" ]; then
@@ -25,9 +23,11 @@ if [ ! -d "$TAW_DIR" ]; then
     exit 1
 fi
 
+# Initialize logging
+init_logging "$TAW_DIR" "new-task"
+
 # Ensure directories exist
 mkdir -p "$AGENTS_DIR"
-mkdir -p "$LOG_DIR"
 
 # Create temp file for editing with hint
 temp_file=$(mktemp) || {
@@ -180,7 +180,7 @@ log "Task created: $final_name"
 # Start the agent in background (handle-task creates window and runs claude)
 # Use nohup to ensure process survives parent exit
 debug "Calling handle-task: $agent_dir (background)"
-nohup "$TAW_HOME/_taw/bin/handle-task" "$agent_dir" >> "$LOG_DIR/handle-task.log" 2>&1 &
+nohup "$TAW_HOME/_taw/bin/handle-task" "$agent_dir" >> "$TAW_DIR/log" 2>&1 &
 
 # Wait for handle-task to create window (check for .tab-lock/window_id)
 # This prevents the _ window from closing before new window is created

@@ -115,10 +115,11 @@ fi
 TAW_DIR="$PROJECT_DIR/.taw"
 AGENT_DIR="$TAW_DIR/agents/$TASK_NAME"
 WORKTREE_DIR="$AGENT_DIR/worktree"
-LOG_FILE="$TAW_DIR/.metadata/log/end-task.log"
 
-mkdir -p "$(dirname "$LOG_FILE")"
-log "=== End task UI: $TASK_NAME ===" "$LOG_FILE"
+# Initialize logging
+init_logging "$TAW_DIR" "end-task-ui" "$TASK_NAME"
+
+log "=== End task UI ==="
 
 # Check if agent directory exists
 if [ ! -d "$AGENT_DIR" ]; then
@@ -313,7 +314,7 @@ print_step "start" "Closing window..."
 # Note: We're in pane 1 (user pane), killing window will close both panes
 tm "$SESSION_NAME" kill-window -t "$WINDOW_ID" 2>/dev/null || true
 
-log "End task UI completed: $TASK_NAME" "$LOG_FILE"
+log "End task UI completed"
 
 # Process queue
 "$TAW_HOME/_taw/bin/process-queue" "$SESSION_NAME" &

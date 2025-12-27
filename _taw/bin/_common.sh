@@ -76,32 +76,60 @@ truncate_name() {
 # Logging
 # ============================================================================
 
+# Global log context (set by each script)
+# TAW_LOG_SCRIPT: script name (e.g., "taw", "handle-task")
+# TAW_LOG_TASK: current task name (optional)
+# TAW_LOG_FILE: unified log file path
+
+# Initialize logging for a script
+# Usage: init_logging "$TAW_DIR" "script-name" ["task-name"]
+init_logging() {
+    local taw_dir="$1"
+    local script_name="$2"
+    local task_name="${3:-}"
+
+    export TAW_LOG_FILE="$taw_dir/log"
+    export TAW_LOG_SCRIPT="$script_name"
+    export TAW_LOG_TASK="$task_name"
+}
+
 # Debug output (uses TAW_DEBUG env var)
 # Usage: debug "message"
 debug() {
     if [ "${TAW_DEBUG:-0}" = "1" ]; then
-        local script_name="$(basename "${BASH_SOURCE[1]}")"
+        local script_name="${TAW_LOG_SCRIPT:-$(basename "${BASH_SOURCE[1]}")}"
         echo "[DEBUG $script_name] $*" >&2
     fi
 }
 
-# Log to file with timestamp
-# Usage: log "message" "$LOG_FILE"
+# Log to unified file with timestamp, script name, and task
+# Usage: log "message"
+# Format: [2024-12-27 10:30:45] [handle-task:fix-bug] Processing task
 log() {
     local message="$1"
-    local log_file="${2:-$LOG_FILE}"
+    local log_file="${TAW_LOG_FILE:-}"
+
     if [ -n "$log_file" ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $message" >> "$log_file"
+        local script_name="${TAW_LOG_SCRIPT:-unknown}"
+        local task_name="${TAW_LOG_TASK:-}"
+        local context
+
+        if [ -n "$task_name" ]; then
+            context="$script_name:$task_name"
+        else
+            context="$script_name"
+        fi
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$context] $message" >> "$log_file"
     fi
 }
 
 # Log warning (both to file and stderr)
-# Usage: warn "message" "$LOG_FILE"
+# Usage: warn "message"
 warn() {
     local message="$1"
-    local log_file="${2:-$LOG_FILE}"
     echo "${EMOJI_WARNING} $message" >&2
-    log "WARNING: $message" "$log_file"
+    log "WARNING: $message"
 }
 
 # ============================================================================

@@ -53,8 +53,6 @@ PROJECT_DIR="$(pwd)"
 TAW_DIR="$PROJECT_DIR/.taw"
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
-LOG_DIR="$TAW_DIR/.metadata/log"
-LOG_FILE="$LOG_DIR/start.log"
 AGENTS_DIR="$TAW_DIR/agents"
 SESSION_NAME="$PROJECT_NAME"
 
@@ -386,7 +384,7 @@ reopen_incomplete_tasks() {
         debug "Reopening: $agent_dir"
 
         # Use handle-task with --reopen --no-input flags
-        nohup "$TAW_HOME/_taw/bin/handle-task" --reopen --no-input "$agent_dir" >> "$LOG_DIR/handle-task.log" 2>&1 &
+        nohup "$TAW_HOME/_taw/bin/handle-task" --reopen --no-input "$agent_dir" >> "$TAW_DIR/log" 2>&1 &
     done
 }
 
@@ -450,9 +448,9 @@ setup_tmux_config() {
     tm set -t "$SESSION_NAME" pane-border-style "fg=colour238"
     tm set -t "$SESSION_NAME" pane-active-border-style "fg=cyan,bold"
 
-    # Unbind all default keys and set minimal bindings
+    # Unbind root table keys only (preserve prefix table to avoid "table prefix doesn't exist" error)
     # All bindings use Alt key to avoid conflicts with shell keybindings
-    tm unbind-key -a
+    tm unbind-key -T root -a 2>/dev/null || true
 
     # Core navigation
     tm bind -n M-Tab select-pane -t :.+     # Cycle panes
@@ -482,8 +480,10 @@ start_session() {
     check_dependencies
 
     # Create directories
-    mkdir -p "$LOG_DIR"
     mkdir -p "$AGENTS_DIR"
+
+    # Initialize logging
+    init_logging "$TAW_DIR" "taw"
 
     log "=== Session start ==="
     log "Project: $PROJECT_NAME"
@@ -566,8 +566,8 @@ if [ "$IS_GIT_REPO" = true ]; then
     update_gitignore
 fi
 
-# Ensure log directory exists for reattach logging
-mkdir -p "$LOG_DIR"
+# Initialize logging (before any log calls)
+init_logging "$TAW_DIR" "taw"
 
 # Export TAW_HOME and TAW_DEBUG for child scripts
 export TAW_HOME TAW_DEBUG

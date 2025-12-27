@@ -49,16 +49,15 @@ taw/                           # 이 레포
 {any-project}/                 # 사용자 프로젝트 (git 또는 일반 디렉토리)
 └── .taw/                      # taw가 생성하는 디렉토리
     ├── config                 # 프로젝트 설정 (YAML, 초기 설정 시 생성)
+    ├── log                    # 통합 로그 (모든 스크립트의 로그가 여기에)
     ├── PROMPT.md              # 프로젝트별 프롬프트
     ├── .global-prompt         # -> 전역 프롬프트 (symlink, git 모드에 따라 다름)
     ├── .is-git-repo           # git 모드 마커 (git 레포일 때만 존재)
     ├── .claude                # -> _taw/claude (symlink)
-    ├── .metadata/             # 로그 및 상태
     ├── .queue/                # 빠른 태스크 큐 (⌥ u로 추가)
     │   └── 001.task           # 대기 중인 태스크 (순서대로 처리)
     └── agents/{task-name}/    # 태스크별 작업 공간
         ├── task               # 태스크 내용
-        ├── log                # 진행 로그
         ├── attach             # 태스크 재연결 스크립트
         ├── origin             # -> 프로젝트 루트 (symlink)
         ├── worktree/          # git worktree (git 모드에서만 자동 생성)

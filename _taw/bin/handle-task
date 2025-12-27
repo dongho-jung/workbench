@@ -53,8 +53,8 @@ PROJECT_DIR=$(dirname "$TAW_DIR")
 PROJECT_NAME=$(basename "$PROJECT_DIR")
 SESSION_NAME="$PROJECT_NAME"
 
-LOG_DIR="$TAW_DIR/.metadata/log"
-mkdir -p "$LOG_DIR"
+# Initialize logging with task name
+init_logging "$TAW_DIR" "handle-task" "$TASK_NAME"
 
 # Check if this is a git repo (marker file created by taw)
 IS_GIT_REPO=false
@@ -70,7 +70,6 @@ debug "Config: work_mode=$WORK_MODE, on_complete=$ON_COMPLETE"
 # Use .global-prompt symlink (points to appropriate PROMPT based on git mode)
 GLOBAL_PROMPT="$TAW_DIR/.global-prompt"
 PROJECT_PROMPT="$TAW_DIR/PROMPT.md"
-LOG_FILE="$LOG_DIR/handle-task.log"
 
 # Atomic check-and-create using mkdir (prevents race conditions)
 # mkdir fails if directory already exists, making it safe for concurrent access
@@ -84,7 +83,7 @@ if [ "$REOPEN" = true ] && [ -d "$TAB_MARKER" ]; then
 fi
 
 if ! mkdir "$TAB_MARKER" 2>/dev/null; then
-    log "Task already being processed: $TASK_NAME" "$LOG_FILE"
+    log "Task already being processed: $TASK_NAME"
     debug "Task already processed, exiting"
     exit 0
 fi
@@ -99,7 +98,7 @@ cleanup_on_error() {
 }
 trap cleanup_on_error EXIT
 
-log "New task detected: $TASK_NAME" "$LOG_FILE"
+log "New task detected: $TASK_NAME"
 debug "New task: $TASK_NAME (IS_GIT_REPO=$IS_GIT_REPO)"
 
 # Create origin and attach symlinks (use -sf to avoid TOCTOU race)
@@ -119,7 +118,7 @@ if [ "$USE_WORKTREE" = true ]; then
     # Create worktree for this task
     WORK_DIR="$TASK_DIR/worktree"
     if [ ! -d "$WORK_DIR" ]; then
-        log "Creating worktree: $WORK_DIR" "$LOG_FILE"
+        log "Creating worktree: $WORK_DIR"
         debug "Creating worktree: $WORK_DIR"
         git -C "$PROJECT_DIR" worktree prune 2>/dev/null || true
 
@@ -145,11 +144,11 @@ if [ "$USE_WORKTREE" = true ]; then
 
         debug "Running: git worktree add $WORK_DIR -b $TASK_NAME"
         # Use timeout to prevent hanging on slow/frozen git operations
-        if ! timeout 30 git -C "$PROJECT_DIR" worktree add "$WORK_DIR" -b "$TASK_NAME" 2>> "$LOG_DIR/handle-task.log"; then
+        if ! timeout 30 git -C "$PROJECT_DIR" worktree add "$WORK_DIR" -b "$TASK_NAME" 2>> "$TAW_DIR/log"; then
             # Branch might already exist, try without -b
             debug "First attempt failed, trying without -b flag..."
-            if ! timeout 30 git -C "$PROJECT_DIR" worktree add "$WORK_DIR" "$TASK_NAME" 2>> "$LOG_DIR/handle-task.log"; then
-                log "Failed to create worktree for $TASK_NAME (timeout or error)" "$LOG_FILE"
+            if ! timeout 30 git -C "$PROJECT_DIR" worktree add "$WORK_DIR" "$TASK_NAME" 2>> "$TAW_DIR/log"; then
+                log "Failed to create worktree for $TASK_NAME (timeout or error)"
                 debug "Failed to create worktree!"
                 exit 1
             fi
@@ -158,8 +157,8 @@ if [ "$USE_WORKTREE" = true ]; then
         # Apply stashed changes to worktree using hash (original dir unchanged)
         if [ -n "$STASH_HASH" ]; then
             debug "Applying stash $STASH_HASH to worktree..."
-            if ! git -C "$WORK_DIR" stash apply "$STASH_HASH" 2>> "$LOG_DIR/handle-task.log"; then
-                log "Warning: stash apply had conflicts in $TASK_NAME" "$LOG_FILE"
+            if ! git -C "$WORK_DIR" stash apply "$STASH_HASH" 2>> "$TAW_DIR/log"; then
+                log "Warning: stash apply had conflicts in $TASK_NAME"
                 echo "⚠️  Warning: Uncommitted changes may have conflicts. Check worktree." >> "$TASK_DIR/log"
             fi
         fi
@@ -176,7 +175,7 @@ if [ "$USE_WORKTREE" = true ]; then
         fi
         rm -f "$UNTRACKED_LIST"
 
-        log "Worktree created: $WORK_DIR" "$LOG_FILE"
+        log "Worktree created: $WORK_DIR"
         debug "Worktree created successfully"
     else
         debug "Worktree already exists: $WORK_DIR"
@@ -185,10 +184,10 @@ else
     # Main mode or non-git: work directly in project directory
     WORK_DIR="$PROJECT_DIR"
     if [ "$IS_GIT_REPO" = true ]; then
-        log "Main mode: working in $WORK_DIR" "$LOG_FILE"
+        log "Main mode: working in $WORK_DIR"
         debug "Main mode (work_mode=main): WORK_DIR=$WORK_DIR"
     else
-        log "Non-git mode: working in $WORK_DIR" "$LOG_FILE"
+        log "Non-git mode: working in $WORK_DIR"
         debug "Non-git mode: WORK_DIR=$WORK_DIR"
     fi
 fi
@@ -274,12 +273,12 @@ _send_to_claude() {
 
 # Local wrapper for wait_for_claude_ready with logging
 _wait_for_claude_ready() {
-    log "Waiting for claude to be ready..." "$LOG_FILE"
+    log "Waiting for claude to be ready..."
     if wait_for_claude_ready "$SESSION_NAME" "$window_id"; then
-        log "Claude ready" "$LOG_FILE"
+        log "Claude ready"
         return 0
     else
-        log "Timeout waiting for claude" "$LOG_FILE"
+        log "Timeout waiting for claude"
         return 1
     fi
 }
@@ -306,7 +305,7 @@ fi
 # Wait for claude to be ready
 debug "Waiting for claude to start..."
 if ! _wait_for_claude_ready; then
-    log "Failed to start claude for $TASK_NAME - killing orphaned pane" "$LOG_FILE"
+    log "Failed to start claude for $TASK_NAME - killing orphaned pane"
     debug "FAILED: claude did not start properly"
     kill_agent_pane
     exit 1
@@ -320,7 +319,7 @@ if echo "$screen_content" | grep -qiE "trust|Trust this project|y/n|\[y\]|Are yo
     _send_shell_cmd "y"
     debug "Waiting for claude to be ready again..."
     if ! _wait_for_claude_ready; then
-        log "Failed after trust confirmation for $TASK_NAME" "$LOG_FILE"
+        log "Failed after trust confirmation for $TASK_NAME"
         kill_agent_pane
         exit 1
     fi
@@ -332,11 +331,11 @@ sleep 0.5
 # Send the task instruction to claude (unless --no-input flag)
 if [ "$NO_INPUT" = true ]; then
     debug "Skipping task input (--no-input flag)"
-    log "Created window: $window_name (no input sent - reopen mode)" "$LOG_FILE"
+    log "Created window: $window_name (no input sent - reopen mode)"
 else
     debug "Sending task instruction to claude..."
     _send_to_claude "ultrathink Read and execute the task from '$TASK_DIR/.user-prompt'"
-    log "Created window: $window_name, sent task to claude" "$LOG_FILE"
+    log "Created window: $window_name, sent task to claude"
     debug "Task sent successfully. Window: $window_name"
 fi
 
