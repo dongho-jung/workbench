@@ -1,0 +1,857 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/donghojung/taw/internal/app"
+	"github.com/donghojung/taw/internal/claude"
+	"github.com/donghojung/taw/internal/config"
+	"github.com/donghojung/taw/internal/constants"
+	"github.com/donghojung/taw/internal/embed"
+	"github.com/donghojung/taw/internal/git"
+	"github.com/donghojung/taw/internal/logging"
+	"github.com/donghojung/taw/internal/task"
+	"github.com/donghojung/taw/internal/tmux"
+	"github.com/donghojung/taw/internal/tui"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// internalCmd groups all internal commands
+var internalCmd = &cobra.Command{
+	Use:    "internal",
+	Short:  "Internal commands (used by tmux keybindings)",
+	Hidden: true,
+}
+
+func init() {
+	internalCmd.AddCommand(toggleNewCmd)
+	internalCmd.AddCommand(newTaskCmd)
+	internalCmd.AddCommand(handleTaskCmd)
+	internalCmd.AddCommand(endTaskCmd)
+	internalCmd.AddCommand(endTaskUICmd)
+	internalCmd.AddCommand(attachCmd)
+	internalCmd.AddCommand(cleanupCmd)
+	internalCmd.AddCommand(processQueueCmd)
+	internalCmd.AddCommand(quickTaskCmd)
+	internalCmd.AddCommand(mergeCompletedCmd)
+	internalCmd.AddCommand(popupShellCmd)
+	internalCmd.AddCommand(toggleLogCmd)
+	internalCmd.AddCommand(logViewerCmd)
+	internalCmd.AddCommand(toggleHelpCmd)
+	internalCmd.AddCommand(recoverTaskCmd)
+}
+
+var toggleNewCmd = &cobra.Command{
+	Use:   "toggle-new [session]",
+	Short: "Toggle the new task window",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+		tm := tmux.New(sessionName)
+
+		// Check if _ window exists
+		windows, err := tm.ListWindows()
+		if err != nil {
+			return err
+		}
+
+		for _, w := range windows {
+			if strings.HasPrefix(w.Name, constants.EmojiNew) {
+				// Window exists, select it and run new-task
+				if err := tm.SelectWindow(w.ID); err != nil {
+					return err
+				}
+				// Run new-task in the existing window
+				tawBin, _ := os.Executable()
+				newTaskCmd := fmt.Sprintf("%s internal new-task %s", tawBin, sessionName)
+				tm.SendKeysLiteral(w.ID, newTaskCmd)
+				tm.SendKeys(w.ID, "Enter")
+				return nil
+			}
+		}
+
+		// Create new window without command (keeps shell open)
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		windowID, err := tm.NewWindow(tmux.WindowOpts{
+			Name:     constants.NewWindowName,
+			StartDir: app.ProjectDir,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Send new-task command to the new window
+		tawBin, _ := os.Executable()
+		newTaskCmd := fmt.Sprintf("%s internal new-task %s", tawBin, sessionName)
+		tm.SendKeysLiteral(windowID, newTaskCmd)
+		tm.SendKeys(windowID, "Enter")
+
+		return nil
+	},
+}
+
+var newTaskCmd = &cobra.Command{
+	Use:   "new-task [session]",
+	Short: "Create a new task",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		// Setup logging
+		logger, _ := logging.New(app.GetLogPath(), app.Debug)
+		if logger != nil {
+			defer logger.Close()
+			logger.SetScript("new-task")
+			logging.SetGlobal(logger)
+		}
+
+		// Open editor for task content
+		content, err := openEditor(app.ProjectDir)
+		if err != nil {
+			return fmt.Errorf("failed to open editor: %w", err)
+		}
+
+		if strings.TrimSpace(content) == "" {
+			fmt.Println("Task content is empty, aborting.")
+			return nil
+		}
+
+		// Create task with spinner
+		mgr := task.NewManager(app.AgentsDir, app.ProjectDir, app.TawDir, app.IsGitRepo, app.Config)
+
+		var newTask *task.Task
+		spinner := tui.NewSpinner("태스크 이름 생성 중...")
+		p := tea.NewProgram(spinner)
+
+		// Run task creation in background
+		go func() {
+			t, err := mgr.CreateTask(content)
+			if err != nil {
+				p.Send(tui.SpinnerDoneMsg{Err: err})
+				return
+			}
+			newTask = t
+			p.Send(tui.SpinnerDoneMsg{Result: t.Name})
+		}()
+
+		finalModel, err := p.Run()
+		if err != nil {
+			return fmt.Errorf("spinner error: %w", err)
+		}
+
+		spinnerResult := finalModel.(*tui.Spinner)
+		if spinnerResult.GetError() != nil {
+			return fmt.Errorf("failed to create task: %w", spinnerResult.GetError())
+		}
+
+		logging.Log("Task created: %s", newTask.Name)
+
+		// Handle task in background
+		tawBin, _ := os.Executable()
+		handleCmd := exec.Command(tawBin, "internal", "handle-task", sessionName, newTask.AgentDir)
+		handleCmd.Start()
+
+		// Wait for window to be created
+		windowIDFile := filepath.Join(newTask.AgentDir, ".tab-lock", "window_id")
+		for i := 0; i < 60; i++ { // 30 seconds max (60 * 500ms)
+			if _, err := os.Stat(windowIDFile); err == nil {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		return nil
+	},
+}
+
+var handleTaskCmd = &cobra.Command{
+	Use:   "handle-task [session] [agent-dir]",
+	Short: "Handle a task (create window, start Claude)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+		agentDir := args[1]
+
+		taskName := filepath.Base(agentDir)
+
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		// Setup logging
+		logger, _ := logging.New(app.GetLogPath(), app.Debug)
+		if logger != nil {
+			defer logger.Close()
+			logger.SetScript("handle-task")
+			logger.SetTask(taskName)
+			logging.SetGlobal(logger)
+		}
+
+		logging.Log("New task detected")
+
+		// Get task
+		mgr := task.NewManager(app.AgentsDir, app.ProjectDir, app.TawDir, app.IsGitRepo, app.Config)
+		t, err := mgr.GetTask(taskName)
+		if err != nil {
+			return err
+		}
+
+		// Create tab-lock atomically
+		created, err := t.CreateTabLock()
+		if err != nil {
+			return err
+		}
+		if !created {
+			logging.Log("Task already being handled")
+			return nil
+		}
+
+		// Setup worktree if git mode
+		if app.IsGitRepo && app.Config.WorkMode == config.WorkModeWorktree {
+			logging.Log("Creating worktree")
+			if err := mgr.SetupWorktree(t); err != nil {
+				t.RemoveTabLock()
+				return fmt.Errorf("failed to setup worktree: %w", err)
+			}
+		}
+
+		// Setup symlinks
+		tawHome, _ := getTawHome()
+		t.SetupSymlinks(tawHome, app.ProjectDir)
+
+		// Create tmux window
+		tm := tmux.New(sessionName)
+		workDir := mgr.GetWorkingDirectory(t)
+
+		windowID, err := tm.NewWindow(tmux.WindowOpts{
+			Name:     t.GetWindowName(),
+			StartDir: workDir,
+			Detached: true,
+		})
+		if err != nil {
+			t.RemoveTabLock()
+			return fmt.Errorf("failed to create window: %w", err)
+		}
+
+		// Save window ID
+		t.SaveWindowID(windowID)
+
+		// Split window for user pane
+		tm.SplitWindow(windowID, true, "")
+
+		// Build system prompt
+		globalPrompt, _ := os.ReadFile(app.GetGlobalPromptPath())
+		projectPrompt, _ := os.ReadFile(app.GetPromptPath())
+		systemPrompt := claude.BuildSystemPrompt(string(globalPrompt), string(projectPrompt))
+
+		// Build user prompt with context
+		var userPrompt strings.Builder
+		userPrompt.WriteString(fmt.Sprintf("# Task: %s\n\n", taskName))
+		if app.IsGitRepo && app.Config.WorkMode == config.WorkModeWorktree {
+			userPrompt.WriteString(fmt.Sprintf("**Worktree**: %s\n", workDir))
+		}
+		userPrompt.WriteString(fmt.Sprintf("**Project**: %s\n\n", app.ProjectDir))
+		userPrompt.WriteString(t.Content)
+
+		// Save prompts
+		os.WriteFile(t.GetSystemPromptPath(), []byte(systemPrompt), 0644)
+		os.WriteFile(t.GetUserPromptPath(), []byte(userPrompt.String()), 0644)
+
+		// Get taw binary path for end-task
+		tawBin, _ := os.Executable()
+
+		// Build environment variables and Claude command
+		// These are used by PROMPT.md for auto-merge, auto-pr, etc.
+		var envVars strings.Builder
+		envVars.WriteString(fmt.Sprintf("export TASK_NAME='%s' ", taskName))
+		envVars.WriteString(fmt.Sprintf("TAW_DIR='%s' ", app.TawDir))
+		envVars.WriteString(fmt.Sprintf("PROJECT_DIR='%s' ", app.ProjectDir))
+		if app.IsGitRepo && app.Config.WorkMode == config.WorkModeWorktree {
+			envVars.WriteString(fmt.Sprintf("WORKTREE_DIR='%s' ", workDir))
+		}
+		envVars.WriteString(fmt.Sprintf("WINDOW_ID='%s' ", windowID))
+		envVars.WriteString(fmt.Sprintf("ON_COMPLETE='%s' ", app.Config.OnComplete))
+		envVars.WriteString(fmt.Sprintf("TAW_HOME='%s' ", filepath.Dir(filepath.Dir(tawBin))))
+		envVars.WriteString(fmt.Sprintf("TAW_BIN='%s' ", tawBin))
+		envVars.WriteString(fmt.Sprintf("SESSION_NAME='%s'", sessionName))
+
+		claudeCmd := fmt.Sprintf("%s && claude --dangerously-skip-permissions --system-prompt \"$(cat '%s')\"",
+			envVars.String(), t.GetSystemPromptPath())
+		tm.SendKeysLiteral(windowID+".0", claudeCmd)
+		tm.SendKeys(windowID+".0", "Enter")
+
+		// Wait for Claude to be ready
+		claudeClient := claude.New()
+		if err := claudeClient.WaitForReady(tm, windowID+".0"); err != nil {
+			logging.Warn("Timeout waiting for Claude: %v", err)
+		}
+
+		// Send trust response if needed
+		claudeClient.SendTrustResponse(tm, windowID+".0")
+
+		// Wait a bit more for Claude to be fully ready
+		time.Sleep(500 * time.Millisecond)
+
+		// Send task instruction - tell Claude to read from file
+		taskInstruction := fmt.Sprintf("ultrathink Read and execute the task from '%s'", t.GetUserPromptPath())
+		if err := claudeClient.SendInput(tm, windowID+".0", taskInstruction); err != nil {
+			logging.Warn("Failed to send task instruction: %v", err)
+		}
+
+		logging.Log("Task started")
+		return nil
+	},
+}
+
+var endTaskCmd = &cobra.Command{
+	Use:   "end-task [session] [window-id]",
+	Short: "End a task (commit, merge, cleanup)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+		windowID := args[1]
+
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		// Find task by window ID
+		mgr := task.NewManager(app.AgentsDir, app.ProjectDir, app.TawDir, app.IsGitRepo, app.Config)
+		tasks, _ := mgr.ListTasks()
+
+		var targetTask *task.Task
+		for _, t := range tasks {
+			if id, _ := t.LoadWindowID(); id == windowID {
+				targetTask = t
+				break
+			}
+		}
+
+		if targetTask == nil {
+			return fmt.Errorf("task not found for window %s", windowID)
+		}
+
+		// Setup logging
+		logger, _ := logging.New(app.GetLogPath(), app.Debug)
+		if logger != nil {
+			defer logger.Close()
+			logger.SetScript("end-task")
+			logger.SetTask(targetTask.Name)
+			logging.SetGlobal(logger)
+		}
+
+		logging.Log("=== End task ===")
+		logging.Log("ON_COMPLETE=%s", app.Config.OnComplete)
+
+		tm := tmux.New(sessionName)
+		gitClient := git.New()
+		workDir := mgr.GetWorkingDirectory(targetTask)
+
+		// Commit changes if git mode
+		if app.IsGitRepo {
+			if gitClient.HasChanges(workDir) {
+				logging.Log("Committing changes")
+				gitClient.AddAll(workDir)
+				diffStat, _ := gitClient.GetDiffStat(workDir)
+				message := fmt.Sprintf("chore: auto-commit on task end\n\n%s", diffStat)
+				gitClient.Commit(workDir, message)
+			}
+
+			// Push changes
+			logging.Log("Pushing changes")
+			gitClient.Push(workDir, "origin", targetTask.Name, true)
+
+			// Handle auto-merge mode
+			if app.Config.OnComplete == config.OnCompleteAutoMerge {
+				logging.Log("auto-merge: merging to main...")
+
+				// Get main branch name
+				mainBranch := gitClient.GetMainBranch(app.ProjectDir)
+
+				// Fetch and checkout main in PROJECT_DIR
+				gitClient.Fetch(app.ProjectDir, "origin")
+				if err := gitClient.Checkout(app.ProjectDir, mainBranch); err != nil {
+					logging.Warn("Failed to checkout %s: %v", mainBranch, err)
+				} else {
+					// Pull latest
+					gitClient.Pull(app.ProjectDir)
+
+					// Merge task branch (--no-ff)
+					mergeMsg := fmt.Sprintf("Merge branch '%s'", targetTask.Name)
+					if err := gitClient.Merge(app.ProjectDir, targetTask.Name, true, mergeMsg); err != nil {
+						logging.Warn("Merge failed: %v - may need manual resolution", err)
+						// Abort merge on conflict
+						gitClient.MergeAbort(app.ProjectDir)
+					} else {
+						// Push merged main
+						gitClient.Push(app.ProjectDir, "origin", mainBranch, false)
+						logging.Log("Merged to %s", mainBranch)
+					}
+				}
+			}
+		}
+
+		// Cleanup task
+		logging.Log("Cleanup started")
+		mgr.CleanupTask(targetTask)
+		logging.Log("Cleanup completed")
+
+		// Kill window
+		tm.KillWindow(windowID)
+
+		// Process queue
+		tawBin, _ := os.Executable()
+		exec.Command(tawBin, "internal", "process-queue", sessionName).Start()
+
+		return nil
+	},
+}
+
+var endTaskUICmd = &cobra.Command{
+	Use:   "end-task-ui [session] [window-id]",
+	Short: "End task with UI feedback",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// For now, just call end-task
+		// TODO: Implement proper TUI with progress display
+		return endTaskCmd.RunE(cmd, args)
+	},
+}
+
+var attachCmd = &cobra.Command{
+	Use:   "attach [agent-dir]",
+	Short: "Attach to an existing task",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		agentDir := args[0]
+		// TODO: Implement attach logic
+		fmt.Printf("Attaching to task in %s\n", agentDir)
+		return nil
+	},
+}
+
+var cleanupCmd = &cobra.Command{
+	Use:   "cleanup [task-name]",
+	Short: "Cleanup a specific task",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		taskName := args[0]
+		// TODO: Implement cleanup logic
+		fmt.Printf("Cleaning up task %s\n", taskName)
+		return nil
+	},
+}
+
+var processQueueCmd = &cobra.Command{
+	Use:   "process-queue [session]",
+	Short: "Process the next task in queue",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		queueMgr := task.NewQueueManager(app.QueueDir)
+		queuedTask, err := queueMgr.Pop()
+		if err != nil {
+			return err
+		}
+
+		if queuedTask == nil {
+			return nil // Queue is empty
+		}
+
+		// Create task from queue
+		mgr := task.NewManager(app.AgentsDir, app.ProjectDir, app.TawDir, app.IsGitRepo, app.Config)
+		newTask, err := mgr.CreateTask(queuedTask.Content)
+		if err != nil {
+			return err
+		}
+
+		// Handle task
+		tawBin, _ := os.Executable()
+		handleCmd := exec.Command(tawBin, "internal", "handle-task", sessionName, newTask.AgentDir)
+		return handleCmd.Start()
+	},
+}
+
+var quickTaskCmd = &cobra.Command{
+	Use:   "quick-task [session]",
+	Short: "Add a quick task to the queue",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		tm := tmux.New(sessionName)
+
+		// Use tmux display-popup to get input
+		popupCmd := fmt.Sprintf("read -p 'Quick task: ' task && echo \"$task\" >> %s/.queue/$(date +%%s).task", app.TawDir)
+
+		return tm.DisplayPopup(tmux.PopupOpts{
+			Width:  "60",
+			Height: "3",
+			Title:  "Quick Task",
+			Close:  true,
+		}, fmt.Sprintf("bash -c '%s'", popupCmd))
+	},
+}
+
+var mergeCompletedCmd = &cobra.Command{
+	Use:   "merge-completed [session]",
+	Short: "Merge all completed tasks",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		if !app.IsGitRepo {
+			return fmt.Errorf("merge-completed only works in git repositories")
+		}
+
+		tm := tmux.New(sessionName)
+		gitClient := git.New()
+
+		// Find windows with ✅ emoji
+		windows, err := tm.ListWindows()
+		if err != nil {
+			return err
+		}
+
+		for _, w := range windows {
+			if !strings.HasPrefix(w.Name, constants.EmojiDone) {
+				continue
+			}
+
+			// Extract task name
+			taskName := strings.TrimPrefix(w.Name, constants.EmojiDone)
+
+			fmt.Printf("Merging task: %s\n", taskName)
+
+			// Merge branch
+			err := gitClient.Merge(app.ProjectDir, taskName, true, fmt.Sprintf("Merge branch '%s'", taskName))
+			if err != nil {
+				fmt.Printf("Failed to merge %s: %v\n", taskName, err)
+				gitClient.MergeAbort(app.ProjectDir)
+				continue
+			}
+
+			// End task
+			tawBin, _ := os.Executable()
+			exec.Command(tawBin, "internal", "end-task", sessionName, w.ID).Run()
+		}
+
+		return nil
+	},
+}
+
+var popupShellCmd = &cobra.Command{
+	Use:   "popup-shell [session]",
+	Short: "Toggle popup shell",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+		tm := tmux.New(sessionName)
+
+		// Check if popup is open
+		isOpen, _ := tm.GetOption("@taw_popup_open")
+		if isOpen == "1" {
+			tm.SetOption("@taw_popup_open", "0", false)
+			// Popup will close automatically
+			return nil
+		}
+
+		tm.SetOption("@taw_popup_open", "1", false)
+
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "/bin/bash"
+		}
+
+		return tm.DisplayPopup(tmux.PopupOpts{
+			Width:  "80%",
+			Height: "80%",
+			Title:  "Shell",
+			Close:  true,
+		}, fmt.Sprintf("cd %s && %s", app.ProjectDir, shell))
+	},
+}
+
+var toggleLogCmd = &cobra.Command{
+	Use:   "toggle-log [session]",
+	Short: "Toggle log viewer",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+		tm := tmux.New(sessionName)
+
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		// Check if log popup is open
+		isOpen, _ := tm.GetOption("@taw_log_open")
+		if isOpen == "1" {
+			tm.SetOption("@taw_log_open", "0", false)
+			return nil
+		}
+
+		tm.SetOption("@taw_log_open", "1", false)
+
+		logPath := app.GetLogPath()
+
+		// Get the taw binary path
+		tawBin, err := os.Executable()
+		if err != nil {
+			tawBin = "taw"
+		}
+
+		return tm.DisplayPopup(tmux.PopupOpts{
+			Width:  "90%",
+			Height: "80%",
+			Title:  "Log Viewer",
+			Close:  true,
+		}, fmt.Sprintf("%s internal log-viewer %s", tawBin, logPath))
+	},
+}
+
+var logViewerCmd = &cobra.Command{
+	Use:    "log-viewer [logfile]",
+	Short:  "Run the log viewer",
+	Args:   cobra.ExactArgs(1),
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		logFile := args[0]
+		return tui.RunLogViewer(logFile)
+	},
+}
+
+var toggleHelpCmd = &cobra.Command{
+	Use:   "toggle-help [session]",
+	Short: "Toggle help popup",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+		tm := tmux.New(sessionName)
+
+		// Check if help popup is open
+		isOpen, _ := tm.GetOption("@taw_help_open")
+		if isOpen == "1" {
+			// Close popup using display-popup -C
+			tm.SetOption("@taw_help_open", "", true)
+			tm.Run("display-popup", "-C")
+			return nil
+		}
+
+		tm.SetOption("@taw_help_open", "1", true)
+
+		// Get help content from embedded assets
+		helpContent, err := embed.GetHelp()
+		if err != nil {
+			return fmt.Errorf("failed to get help content: %w", err)
+		}
+
+		// Write to temp file
+		tmpFile, err := os.CreateTemp("", "taw-help-*.md")
+		if err != nil {
+			return fmt.Errorf("failed to create temp file: %w", err)
+		}
+		tmpPath := tmpFile.Name()
+		tmpFile.WriteString(helpContent)
+		tmpFile.Close()
+
+		// Clear state and remove temp file when popup closes
+		popupCmd := fmt.Sprintf("less '%s'; rm -f '%s'; tmux -L 'taw-%s' set-option -g @taw_help_open ''", tmpPath, tmpPath, sessionName)
+
+		return tm.DisplayPopup(tmux.PopupOpts{
+			Width:  "80%",
+			Height: "80%",
+			Title:  " Help (q to close) ",
+			Close:  true,
+		}, popupCmd)
+	},
+}
+
+var recoverTaskCmd = &cobra.Command{
+	Use:   "recover-task [session] [task-name]",
+	Short: "Recover a corrupted task",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionName := args[0]
+		taskName := args[1]
+
+		app, err := getAppFromSession(sessionName)
+		if err != nil {
+			return err
+		}
+
+		mgr := task.NewManager(app.AgentsDir, app.ProjectDir, app.TawDir, app.IsGitRepo, app.Config)
+		t, err := mgr.GetTask(taskName)
+		if err != nil {
+			return err
+		}
+
+		recoveryMgr := task.NewRecoveryManager(app.ProjectDir)
+		if err := recoveryMgr.RecoverTask(t); err != nil {
+			return fmt.Errorf("failed to recover task: %w", err)
+		}
+
+		fmt.Printf("Task %s recovered successfully\n", taskName)
+		return nil
+	},
+}
+
+// getAppFromSession creates an App from session name
+func getAppFromSession(sessionName string) (*app.App, error) {
+	// Session name is the project directory name
+	// We need to find the project directory
+
+	// First, try to get it from environment
+	if tawDir := os.Getenv("TAW_DIR"); tawDir != "" {
+		projectDir := filepath.Dir(tawDir)
+		application, err := app.New(projectDir)
+		if err != nil {
+			return nil, err
+		}
+		return loadAppConfig(application)
+	}
+
+	// Try current directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
+	// Walk up to find .taw directory
+	dir := cwd
+	for {
+		tawDir := filepath.Join(dir, ".taw")
+		if _, err := os.Stat(tawDir); err == nil {
+			application, err := app.New(dir)
+			if err != nil {
+				return nil, err
+			}
+			return loadAppConfig(application)
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	return nil, fmt.Errorf("could not find project directory for session %s", sessionName)
+}
+
+func loadAppConfig(application *app.App) (*app.App, error) {
+	tawHome, _ := getTawHome()
+	application.SetTawHome(tawHome)
+
+	gitClient := git.New()
+	application.SetGitRepo(gitClient.IsGitRepo(application.ProjectDir))
+
+	if err := application.LoadConfig(); err != nil {
+		application.Config = config.DefaultConfig()
+	}
+
+	return application, nil
+}
+
+// openEditor opens an editor for task input
+func openEditor(workDir string) (string, error) {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim"
+	}
+
+	// Create temp file
+	tmpFile, err := os.CreateTemp("", "taw-task-*.md")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	// Write template
+	template := `# Task Description
+# Lines starting with # will be ignored
+# Describe your task below:
+
+`
+	tmpFile.WriteString(template)
+	tmpFile.Close()
+
+	// Build editor command with options
+	var cmd *exec.Cmd
+	editorBase := filepath.Base(editor)
+
+	// For vim/nvim, start in insert mode at the end of file
+	if editorBase == "vim" || editorBase == "nvim" || editorBase == "vi" {
+		cmd = exec.Command(editor, "-c", "normal G", "-c", "startinsert", tmpPath)
+	} else {
+		cmd = exec.Command(editor, tmpPath)
+	}
+
+	cmd.Dir = workDir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	// Read content
+	data, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Remove comment lines
+	lines := strings.Split(string(data), "\n")
+	var contentLines []string
+	for _, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			contentLines = append(contentLines, line)
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(contentLines, "\n")), nil
+}

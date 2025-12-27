@@ -1,0 +1,66 @@
+# TAW (Tmux + Agent + Worktree)
+
+Claude Code-based autonomous agent work environment
+
+## Keyboard Shortcuts
+
+### Mouse
+  Click           Select pane
+  Drag            Select text (copy mode)
+  Scroll          Scroll pane
+  Border drag     Resize pane
+
+### Navigation
+  ⌥ Tab       Move to next pane (cycle)
+  ⌥ ←/→       Move to previous/next window
+
+### Task Management
+  ⌥ n         Toggle new window (task ↔ new window)
+  ⌥ e         Complete task (commit → PR/merge → cleanup, follows ON_COMPLETE setting)
+  ⌥ m         Batch merge completed tasks (merge + end all ✅ status tasks)
+  ⌥ p         Open/close popup shell (current worktree path)
+  ⌥ l         View live log (tail -f style, scrollable)
+  ⌥ u         Add quick task to queue (auto-processed after completion)
+
+### Session
+  ⌥ q         Exit session (detach)
+  ⌥ h         Open/close this help (toggle)
+  ⌥ /         Open/close this help (toggle)
+
+## Slash Commands (for agents)
+
+  /commit     Smart commit (auto-generate message from diff analysis)
+  /test       Auto-detect and run project tests
+  /pr         Auto-create PR and open browser
+  /merge      Merge worktree branch to project branch
+
+## Directory Structure
+
+  .taw/
+  ├── PROMPT.md              Project-specific agent instructions
+  ├── log                    Unified log file
+  ├── new-task               Task creation script
+  ├── .queue/                Quick task queue (add with ⌥u)
+  └── agents/{task-name}/
+      ├── task               Task content
+      ├── attach             Task reattach (run ./attach)
+      ├── origin/            Project root (symlink)
+      └── worktree/          git worktree (auto-created)
+
+## Window Status Icons
+
+  🤖  Agent working
+  💬  Waiting for user input
+  ✅  Task completed
+  ⚠️  Corrupted (needs recovery or cleanup)
+
+## Environment Variables (for agents)
+
+  TASK_NAME     Task name
+  TAW_DIR       .taw directory path
+  PROJECT_DIR   Project root path
+  WORKTREE_DIR  Worktree path
+  WINDOW_ID     tmux window ID (for status updates)
+
+---
+Press ⌥h, ⌥/ or q to exit

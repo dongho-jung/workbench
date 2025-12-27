@@ -1,0 +1,409 @@
+// Package tmux provides an interface for interacting with tmux.
+package tmux
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/donghojung/taw/internal/constants"
+)
+
+// Client defines the interface for tmux operations.
+type Client interface {
+	// Session management
+	HasSession(name string) bool
+	NewSession(opts SessionOpts) error
+	AttachSession(name string) error
+	KillSession(name string) error
+	KillServer() error
+
+	// Window management
+	NewWindow(opts WindowOpts) (string, error)
+	KillWindow(target string) error
+	RenameWindow(target, name string) error
+	ListWindows() ([]Window, error)
+	SelectWindow(target string) error
+	MoveWindow(source, target string) error
+
+	// Pane operations
+	SplitWindow(target string, horizontal bool, command string) error
+	SelectPane(target string) error
+	SendKeys(target string, keys ...string) error
+	SendKeysLiteral(target, text string) error
+	CapturePane(target string, lines int) (string, error)
+
+	// Display popup
+	DisplayPopup(opts PopupOpts, command string) error
+
+	// Options
+	SetOption(key, value string, global bool) error
+	GetOption(key string) (string, error)
+	SetEnv(key, value string) error
+
+	// Keybindings
+	Bind(opts BindOpts) error
+	Unbind(key string) error
+
+	// Utility
+	Run(args ...string) error
+	RunWithOutput(args ...string) (string, error)
+	Display(format string) (string, error)
+}
+
+// SessionOpts contains options for creating a new session.
+type SessionOpts struct {
+	Name       string
+	StartDir   string
+	WindowName string
+	Detached   bool
+	Width      int
+	Height     int
+	Command    string // Initial command to run in the session
+}
+
+// WindowOpts contains options for creating a new window.
+type WindowOpts struct {
+	Target     string // session:index or session name
+	Name       string
+	StartDir   string
+	Command    string
+	Detached   bool
+	AfterIndex int // -1 means append
+}
+
+// PopupOpts contains options for display-popup.
+type PopupOpts struct {
+	Width   string
+	Height  string
+	Title   string
+	Style   string
+	Close   bool // -E flag: close on exit
+	BorderStyle string
+}
+
+// BindOpts contains options for key binding.
+type BindOpts struct {
+	Key     string
+	Command string
+	NoPrefix bool // -n flag
+	Table   string
+}
+
+// Window represents a tmux window.
+type Window struct {
+	ID     string
+	Index  int
+	Name   string
+	Active bool
+}
+
+// tmuxClient implements the Client interface.
+type tmuxClient struct {
+	socket string
+}
+
+// New creates a new tmux client with the given socket name.
+func New(sessionName string) Client {
+	return &tmuxClient{
+		socket: constants.TmuxSocketPrefix + sessionName,
+	}
+}
+
+// NewWithSocket creates a new tmux client with a custom socket.
+func NewWithSocket(socket string) Client {
+	return &tmuxClient{
+		socket: socket,
+	}
+}
+
+func (c *tmuxClient) cmd(args ...string) *exec.Cmd {
+	allArgs := append([]string{"-L", c.socket}, args...)
+	return exec.Command("tmux", allArgs...)
+}
+
+func (c *tmuxClient) cmdContext(ctx context.Context, args ...string) *exec.Cmd {
+	allArgs := append([]string{"-L", c.socket}, args...)
+	return exec.CommandContext(ctx, "tmux", allArgs...)
+}
+
+func (c *tmuxClient) Run(args ...string) error {
+	cmd := c.cmd(args...)
+	return cmd.Run()
+}
+
+func (c *tmuxClient) RunWithOutput(args ...string) (string, error) {
+	cmd := c.cmd(args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%w: %s", err, stderr.String())
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// Session management
+
+func (c *tmuxClient) HasSession(name string) bool {
+	err := c.Run("has-session", "-t", name)
+	return err == nil
+}
+
+func (c *tmuxClient) NewSession(opts SessionOpts) error {
+	args := []string{"new-session", "-s", opts.Name}
+
+	if opts.Detached {
+		args = append(args, "-d")
+	}
+	if opts.WindowName != "" {
+		args = append(args, "-n", opts.WindowName)
+	}
+	if opts.StartDir != "" {
+		args = append(args, "-c", opts.StartDir)
+	}
+	if opts.Width > 0 {
+		args = append(args, "-x", fmt.Sprintf("%d", opts.Width))
+	}
+	if opts.Height > 0 {
+		args = append(args, "-y", fmt.Sprintf("%d", opts.Height))
+	}
+	// Command must be the last argument
+	if opts.Command != "" {
+		args = append(args, opts.Command)
+	}
+
+	return c.Run(args...)
+}
+
+func (c *tmuxClient) AttachSession(name string) error {
+	args := []string{"attach-session", "-t", name}
+	cmd := c.cmd(args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func (c *tmuxClient) KillSession(name string) error {
+	return c.Run("kill-session", "-t", name)
+}
+
+func (c *tmuxClient) KillServer() error {
+	return c.Run("kill-server")
+}
+
+// Window management
+
+func (c *tmuxClient) NewWindow(opts WindowOpts) (string, error) {
+	args := []string{"new-window", "-P", "-F", "#{window_id}"}
+
+	if opts.Target != "" {
+		args = append(args, "-t", opts.Target)
+	}
+	if opts.Name != "" {
+		args = append(args, "-n", opts.Name)
+	}
+	if opts.StartDir != "" {
+		args = append(args, "-c", opts.StartDir)
+	}
+	if opts.Detached {
+		args = append(args, "-d")
+	}
+	if opts.AfterIndex >= 0 {
+		args = append(args, "-a", "-t", fmt.Sprintf(":%d", opts.AfterIndex))
+	}
+	if opts.Command != "" {
+		args = append(args, opts.Command)
+	}
+
+	return c.RunWithOutput(args...)
+}
+
+func (c *tmuxClient) KillWindow(target string) error {
+	return c.Run("kill-window", "-t", target)
+}
+
+func (c *tmuxClient) RenameWindow(target, name string) error {
+	return c.Run("rename-window", "-t", target, name)
+}
+
+func (c *tmuxClient) ListWindows() ([]Window, error) {
+	output, err := c.RunWithOutput("list-windows", "-F", "#{window_id}|#{window_index}|#{window_name}|#{window_active}")
+	if err != nil {
+		return nil, err
+	}
+
+	if output == "" {
+		return nil, nil
+	}
+
+	var windows []Window
+	for _, line := range strings.Split(output, "\n") {
+		parts := strings.Split(line, "|")
+		if len(parts) < 4 {
+			continue
+		}
+
+		var index int
+		fmt.Sscanf(parts[1], "%d", &index)
+
+		windows = append(windows, Window{
+			ID:     parts[0],
+			Index:  index,
+			Name:   parts[2],
+			Active: parts[3] == "1",
+		})
+	}
+
+	return windows, nil
+}
+
+func (c *tmuxClient) SelectWindow(target string) error {
+	return c.Run("select-window", "-t", target)
+}
+
+func (c *tmuxClient) MoveWindow(source, target string) error {
+	return c.Run("move-window", "-s", source, "-t", target)
+}
+
+// Pane operations
+
+func (c *tmuxClient) SplitWindow(target string, horizontal bool, command string) error {
+	args := []string{"split-window", "-t", target}
+
+	if horizontal {
+		args = append(args, "-h")
+	} else {
+		args = append(args, "-v")
+	}
+
+	if command != "" {
+		args = append(args, command)
+	}
+
+	return c.Run(args...)
+}
+
+func (c *tmuxClient) SelectPane(target string) error {
+	return c.Run("select-pane", "-t", target)
+}
+
+func (c *tmuxClient) SendKeys(target string, keys ...string) error {
+	args := []string{"send-keys", "-t", target}
+	args = append(args, keys...)
+	return c.Run(args...)
+}
+
+func (c *tmuxClient) SendKeysLiteral(target, text string) error {
+	return c.Run("send-keys", "-t", target, "-l", text)
+}
+
+func (c *tmuxClient) CapturePane(target string, lines int) (string, error) {
+	args := []string{"capture-pane", "-t", target, "-p"}
+	if lines > 0 {
+		args = append(args, "-S", fmt.Sprintf("-%d", lines))
+	}
+	return c.RunWithOutput(args...)
+}
+
+// Display popup
+
+func (c *tmuxClient) DisplayPopup(opts PopupOpts, command string) error {
+	args := []string{"display-popup"}
+
+	if opts.Close {
+		args = append(args, "-E")
+	}
+	if opts.Width != "" {
+		args = append(args, "-w", opts.Width)
+	}
+	if opts.Height != "" {
+		args = append(args, "-h", opts.Height)
+	}
+	if opts.Title != "" {
+		args = append(args, "-T", opts.Title)
+	}
+	if opts.BorderStyle != "" {
+		args = append(args, "-b", opts.BorderStyle)
+	}
+	if opts.Style != "" {
+		args = append(args, "-s", opts.Style)
+	}
+	if command != "" {
+		args = append(args, command)
+	}
+
+	return c.Run(args...)
+}
+
+// Options
+
+func (c *tmuxClient) SetOption(key, value string, global bool) error {
+	args := []string{"set-option"}
+	if global {
+		args = append(args, "-g")
+	}
+	args = append(args, key, value)
+	return c.Run(args...)
+}
+
+func (c *tmuxClient) GetOption(key string) (string, error) {
+	return c.RunWithOutput("show-option", "-gv", key)
+}
+
+func (c *tmuxClient) SetEnv(key, value string) error {
+	return c.Run("set-environment", key, value)
+}
+
+// Keybindings
+
+func (c *tmuxClient) Bind(opts BindOpts) error {
+	args := []string{"bind"}
+
+	if opts.NoPrefix {
+		args = append(args, "-n")
+	}
+	if opts.Table != "" {
+		args = append(args, "-T", opts.Table)
+	}
+
+	args = append(args, opts.Key, opts.Command)
+	return c.Run(args...)
+}
+
+func (c *tmuxClient) Unbind(key string) error {
+	return c.Run("unbind", key)
+}
+
+// Display
+
+func (c *tmuxClient) Display(format string) (string, error) {
+	return c.RunWithOutput("display-message", "-p", format)
+}
+
+// WaitForWindow waits for a window to be created with the given ID file.
+func WaitForWindow(ctx context.Context, checkFn func() (string, bool)) (string, error) {
+	timeout := time.After(constants.WindowCreationTimeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-timeout:
+			return "", fmt.Errorf("timeout waiting for window creation")
+		case <-ticker.C:
+			if id, ok := checkFn(); ok {
+				return id, nil
+			}
+		}
+	}
+}

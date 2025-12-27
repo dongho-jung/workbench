@@ -1,0 +1,153 @@
+// Package app provides the main application context and dependency injection.
+package app
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/donghojung/taw/internal/config"
+	"github.com/donghojung/taw/internal/constants"
+)
+
+// App represents the main application context with all dependencies.
+type App struct {
+	// Paths
+	ProjectDir  string // Root directory of the user's project
+	TawDir      string // .taw directory path
+	AgentsDir   string // agents directory path
+	QueueDir    string // .queue directory path
+	TawHome     string // TAW installation directory
+
+	// Session
+	SessionName string // tmux session name
+
+	// State
+	IsGitRepo bool           // Whether the project is a git repository
+	Config    *config.Config // Project configuration
+
+	// Runtime
+	Debug bool // Debug mode enabled
+}
+
+// New creates a new App instance for the given project directory.
+func New(projectDir string) (*App, error) {
+	absPath, err := filepath.Abs(projectDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve project path: %w", err)
+	}
+
+	tawDir := filepath.Join(absPath, constants.TawDirName)
+	agentsDir := filepath.Join(tawDir, constants.AgentsDirName)
+	queueDir := filepath.Join(tawDir, constants.QueueDirName)
+
+	// Determine session name from project directory name
+	sessionName := filepath.Base(absPath)
+
+	// Check if debug mode is enabled
+	debug := os.Getenv("TAW_DEBUG") == "1"
+
+	app := &App{
+		ProjectDir:  absPath,
+		TawDir:      tawDir,
+		AgentsDir:   agentsDir,
+		QueueDir:    queueDir,
+		SessionName: sessionName,
+		Debug:       debug,
+	}
+
+	return app, nil
+}
+
+// Initialize sets up the .taw directory structure.
+func (a *App) Initialize() error {
+	// Create directories
+	dirs := []string{
+		a.TawDir,
+		a.AgentsDir,
+		a.QueueDir,
+	}
+
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
+	}
+
+	return nil
+}
+
+// LoadConfig loads the project configuration.
+func (a *App) LoadConfig() error {
+	cfg, err := config.Load(a.TawDir)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	a.Config = cfg
+	return nil
+}
+
+// IsInitialized checks if the .taw directory exists.
+func (a *App) IsInitialized() bool {
+	_, err := os.Stat(a.TawDir)
+	return err == nil
+}
+
+// HasConfig checks if a configuration file exists.
+func (a *App) HasConfig() bool {
+	return config.Exists(a.TawDir)
+}
+
+// GetLogPath returns the path to the unified log file.
+func (a *App) GetLogPath() string {
+	return filepath.Join(a.TawDir, constants.LogFileName)
+}
+
+// GetPromptPath returns the path to the project-specific prompt file.
+func (a *App) GetPromptPath() string {
+	return filepath.Join(a.TawDir, constants.PromptFileName)
+}
+
+// GetGlobalPromptPath returns the path to the global prompt symlink.
+func (a *App) GetGlobalPromptPath() string {
+	return filepath.Join(a.TawDir, constants.GlobalPromptLink)
+}
+
+// GetAgentDir returns the path to a specific agent's directory.
+func (a *App) GetAgentDir(taskName string) string {
+	return filepath.Join(a.AgentsDir, taskName)
+}
+
+// SetTawHome sets the TAW installation directory.
+func (a *App) SetTawHome(path string) {
+	a.TawHome = path
+}
+
+// SetGitRepo sets whether the project is a git repository.
+func (a *App) SetGitRepo(isGit bool) {
+	a.IsGitRepo = isGit
+}
+
+// GetEnvVars returns environment variables to be passed to Claude.
+func (a *App) GetEnvVars(taskName, worktreeDir, windowID string) []string {
+	env := os.Environ()
+
+	env = append(env,
+		"TASK_NAME="+taskName,
+		"TAW_DIR="+a.TawDir,
+		"PROJECT_DIR="+a.ProjectDir,
+		"WINDOW_ID="+windowID,
+		"TAW_HOME="+a.TawHome,
+		"SESSION_NAME="+a.SessionName,
+	)
+
+	if a.Config != nil {
+		env = append(env, "ON_COMPLETE="+string(a.Config.OnComplete))
+	}
+
+	if worktreeDir != "" {
+		env = append(env, "WORKTREE_DIR="+worktreeDir)
+	}
+
+	return env
+}

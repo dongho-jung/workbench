@@ -1,0 +1,103 @@
+# TAW Makefile
+
+BINARY_NAME=taw
+VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+BUILD_FLAGS=-ldflags "-X main.Version=$(VERSION)"
+GO=go
+
+# Detect Go binary path
+GO_PATH=$(shell which go 2>/dev/null || echo "/opt/homebrew/bin/go")
+
+.PHONY: all build install clean test fmt lint run help
+
+all: build
+
+## Build the binary
+build:
+	@echo "Building $(BINARY_NAME)..."
+	$(GO_PATH) build $(BUILD_FLAGS) -o $(BINARY_NAME) ./cmd/taw
+
+## Install to ~/.local/bin
+install: build
+	@echo "Installing $(BINARY_NAME) to ~/.local/bin..."
+	@mkdir -p ~/.local/bin
+	@cp $(BINARY_NAME) ~/.local/bin/
+	@echo "Done! Make sure ~/.local/bin is in your PATH"
+
+## Install globally to /usr/local/bin (requires sudo)
+install-global: build
+	@echo "Installing $(BINARY_NAME) to /usr/local/bin..."
+	sudo cp $(BINARY_NAME) /usr/local/bin/
+	@echo "Done!"
+
+## Clean build artifacts
+clean:
+	@echo "Cleaning..."
+	@rm -f $(BINARY_NAME)
+	@$(GO_PATH) clean
+
+## Run tests
+test:
+	@echo "Running tests..."
+	$(GO_PATH) test -v ./...
+
+## Run tests with coverage
+test-coverage:
+	@echo "Running tests with coverage..."
+	$(GO_PATH) test -v -coverprofile=coverage.out ./...
+	$(GO_PATH) tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+
+## Format code
+fmt:
+	@echo "Formatting code..."
+	$(GO_PATH) fmt ./...
+
+## Lint code
+lint:
+	@echo "Linting code..."
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run; \
+	else \
+		echo "golangci-lint not installed. Run: brew install golangci-lint"; \
+	fi
+
+## Download dependencies
+deps:
+	@echo "Downloading dependencies..."
+	$(GO_PATH) mod download
+	$(GO_PATH) mod tidy
+
+## Run the application
+run: build
+	./$(BINARY_NAME)
+
+## Generate mocks (for testing)
+mocks:
+	@echo "Generating mocks..."
+	@if command -v mockgen >/dev/null 2>&1; then \
+		mockgen -source=internal/tmux/client.go -destination=internal/tmux/mock.go -package=tmux; \
+		mockgen -source=internal/git/client.go -destination=internal/git/mock.go -package=git; \
+	else \
+		echo "mockgen not installed. Run: go install github.com/golang/mock/mockgen@latest"; \
+	fi
+
+## Show help
+help:
+	@echo "TAW (Tmux + Agent + Worktree) - Build Commands"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make [target]"
+	@echo ""
+	@echo "Targets:"
+	@echo "  build          Build the binary"
+	@echo "  install        Install to ~/.local/bin"
+	@echo "  install-global Install to /usr/local/bin (requires sudo)"
+	@echo "  clean          Remove build artifacts"
+	@echo "  test           Run tests"
+	@echo "  test-coverage  Run tests with coverage report"
+	@echo "  fmt            Format code"
+	@echo "  lint           Run linter"
+	@echo "  deps           Download dependencies"
+	@echo "  run            Build and run"
+	@echo "  help           Show this help"
