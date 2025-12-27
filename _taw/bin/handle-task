@@ -193,13 +193,17 @@ else
 fi
 
 # Ensure .claude symlink exists in WORK_DIR for slash commands
-if [ ! -L "$WORK_DIR/.claude" ] && [ ! -d "$WORK_DIR/.claude" ]; then
-    # Verify target exists before creating symlink
-    if [ -d "$TAW_DIR/.claude" ] || [ -L "$TAW_DIR/.claude" ]; then
-        debug "Creating .claude symlink in WORK_DIR"
-        ln -sf "$TAW_DIR/.claude" "$WORK_DIR/.claude" 2>/dev/null || warn "Failed to create .claude symlink"
-    else
-        warn ".claude directory not found at $TAW_DIR/.claude - slash commands may not work"
+# Only create symlink in worktree mode (isolated directory)
+# Never create in main/non-git mode to avoid polluting project root
+if [ "$USE_WORKTREE" = true ]; then
+    if [ ! -L "$WORK_DIR/.claude" ] && [ ! -d "$WORK_DIR/.claude" ]; then
+        # Verify target exists before creating symlink
+        if [ -d "$TAW_DIR/.claude" ] || [ -L "$TAW_DIR/.claude" ]; then
+            debug "Creating .claude symlink in worktree"
+            ln -sf "$TAW_DIR/.claude" "$WORK_DIR/.claude" 2>/dev/null || warn "Failed to create .claude symlink"
+        else
+            warn ".claude directory not found at $TAW_DIR/.claude - slash commands may not work"
+        fi
     fi
 fi
 
