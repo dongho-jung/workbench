@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -230,8 +231,8 @@ func setupTmuxConfig(app *app.App, tm tmux.Client) error {
 	tm.SetOption("status", "on", true)
 	tm.SetOption("status-position", "bottom", true)
 	tm.SetOption("status-left", "", true)
-	tm.SetOption("status-right", " ⌥n:new ⌥e:end ⌥m:merge ⌥p:shell ⌥l:log ⌥h:help ⌥q:quit ", true)
-	tm.SetOption("status-right-length", "80", true)
+	tm.SetOption("status-right", " ⌥n:new ⌥e:end ⌥m:merge ⌥p:shell ⌥l:log ⌥u:queue ⌥h:help ⌥q:quit ", true)
+	tm.SetOption("status-right-length", "100", true)
 
 	// Enable mouse mode
 	tm.SetOption("mouse", "on", true)
@@ -247,8 +248,8 @@ func setupTmuxConfig(app *app.App, tm tmux.Client) error {
 		{Key: "M-p", Command: fmt.Sprintf("run-shell '%s internal popup-shell %s'", tawBin, app.SessionName), NoPrefix: true},
 		{Key: "M-u", Command: fmt.Sprintf("run-shell '%s internal quick-task %s'", tawBin, app.SessionName), NoPrefix: true},
 		{Key: "M-l", Command: fmt.Sprintf("run-shell '%s internal toggle-log %s'", tawBin, app.SessionName), NoPrefix: true},
-		{Key: "M-h", Command: fmt.Sprintf("run-shell '%s internal toggle-help %s'", tawBin, app.SessionName), NoPrefix: true},
 		{Key: "M-/", Command: fmt.Sprintf("run-shell '%s internal toggle-help %s'", tawBin, app.SessionName), NoPrefix: true},
+		{Key: "M-h", Command: fmt.Sprintf("run-shell '%s internal toggle-help %s'", tawBin, app.SessionName), NoPrefix: true},
 		{Key: "M-q", Command: "detach", NoPrefix: true},
 	}
 
@@ -299,8 +300,13 @@ func updateGitignore(projectDir string) {
 	contentStr := string(content)
 
 	// Check if .taw is already in .gitignore
-	if filepath.Base(contentStr) == ".taw" || filepath.Base(contentStr) == ".taw/" {
-		return
+	// Look for ".taw" or ".taw/" on its own line
+	lines := strings.Split(contentStr, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == ".taw" || line == ".taw/" {
+			return
+		}
 	}
 
 	// Append .taw
